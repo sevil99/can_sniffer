@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CAN-USB Монитор</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #2c3e50, #34495e);
+            color: white;
+            padding: 25px 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.2em;
+            margin-bottom: 8px;
+            font-weight: 300;
+        }
+
+        .header .subtitle {
+            font-size: 1.1em;
+            opacity: 0.8;
+        }
+
+        .content {
+            display: grid;
+            grid-template-columns: 300px 1fr;
+            min-height: 800px;
+        }
+
+        .sidebar {
+            background: #f8f9fa;
+            border-right: 1px solid #e9ecef;
+            padding: 25px;
+        }
+
+        .main-content {
+            padding: 25px;
+            background: white;
+        }
+
+        .card {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.08);
+            border: 1px solid #e9ecef;
+        }
+
+        .card h3 {
+            color: #2c3e50;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 8px;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #495057;
+            font-size: 0.9em;
+        }
+
+        select,
+        input,
+        button {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        select:focus,
+        input:focus {
+            outline: none;
+            border-color: #3498db;
+            box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #3498db, #2980b9);
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            text-align: center;
+            display: block;
+            margin-top: 5px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 7px 14px rgba(52, 152, 219, 0.3);
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, #27ae60, #219a52);
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, #e74c3c, #c0392b);
+        }
+
+        .btn-warning {
+            background: linear-gradient(135deg, #f39c12, #e67e22);
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .status-connected {
+            background: #27ae60;
+            box-shadow: 0 0 10px #27ae60;
+        }
+
+        .status-disconnected {
+            background: #e74c3c;
+        }
+
+        .messages-container {
+            max-height: 600px;
+            overflow-y: auto;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+        }
+
+        .message-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85em;
+        }
+
+        .message-table th {
+            background: #f8f9fa;
+            padding: 12px 8px;
+            text-align: left;
+            font-weight: 600;
+            color: #495057;
+            border-bottom: 2px solid #dee2e6;
+            position: sticky;
+            top: 0;
+        }
+
+        .message-table td {
+            padding: 10px 8px;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .message-table tr:hover {
+            background: #f8f9fa;
+        }
+
+        .message-id {
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        .message-data {
+            font-family: 'Courier New', monospace;
+            color: #e74c3c;
+        }
+
+        .message-direction-rx {
+            color: #27ae60;
+            font-weight: 600;
+        }
+
+        .message-direction-tx {
+            color: #3498db;
+            font-weight: 600;
+        }
+
+        .message-error {
+            color: #e74c3c;
+            font-weight: 600;
+        }
+
+        .stat-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .stat-item {
+            text-align: center;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+
+        .stat-value {
+            font-size: 1.8em;
+            font-weight: 700;
+            color: #2c3e50;
+        }
+
+        .stat-label {
+            font-size: 0.85em;
+            color: #6c757d;
+            margin-top: 5px;
+        }
+
+        .alert {
+            padding: 12px 15px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+            font-size: 0.9em;
+        }
+
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .alert-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .alert-warning {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            margin: 10px 0;
+        }
+
+        .checkbox-group input {
+            width: auto;
+            margin-right: 8px;
+        }
+
+        .log-output {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.85em;
+            max-height: 200px;
+            overflow-y: auto;
+            margin-top: 15px;
+        }
+
+        .tab-container {
+            margin-top: 20px;
+        }
+
+        .tabs {
+            display: flex;
+            border-bottom: 1px solid #ddd;
+            margin-bottom: 20px;
+        }
+
+        .tab {
+            padding: 12px 25px;
+            cursor: pointer;
+            border: 1px solid transparent;
+            border-bottom: none;
+            border-radius: 6px 6px 0 0;
+            margin-right: 5px;
+            background: #f8f9fa;
+            transition: all 0.3s ease;
+        }
+
+        .tab.active {
+            background: white;
+            border-color: #ddd;
+            border-bottom: 1px solid white;
+            margin-bottom: -1px;
+            font-weight: 600;
+            color: #3498db;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .send-message-form {
+            display: grid;
+            grid-template-columns: 1fr 2fr 1fr;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        @media (max-width: 1024px) {
+            .content {
+                grid-template-columns: 1fr;
+            }
+
+            .sidebar {
+                border-right: none;
+                border-bottom: 1px solid #e9ecef;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>CAN-USB Монитор</h1>
+            <div class="subtitle">Мониторинг и управление CAN-шиной через CHAI библиотеку</div>
+        </div>
+
+        <div class="content">
+            <div class="sidebar">
+                <div class="card">
+                    <h3>Подключение</h3>
+                    <div class="form-group">
+                        <label>CAN Канал:</label>
+                        <select id="channelSelect">
+                            <option value="0">Канал 0</option>
+                            <option value="1">Канал 1</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Скорость (bps):</label>
+                        <select id="baudRateSelect">
+                            <option value="100000">100,000</option>
+                            <option value="125000">125,000</option>
+                            <option value="250000" selected>500,000</option>
+                            <option value="500000">500,000</option>
+                            <option value="1000000">1,000,000</option>
+                        </select>
+                    </div>
+
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="testModeCheckbox">
+                        <label for="testModeCheckbox">Тестовый режим (отправка сообщений)</label>
+                    </div>
+
+                    <button id="connectBtn" class="btn btn-success">Подключиться</button>
+                    <button id="disconnectBtn" class="btn btn-danger" style="display: none;">Отключиться</button>
+
+                    <div id="connectionStatus" class="alert" style="margin-top: 15px; display: none;">
+                        <span class="status-indicator status-disconnected"></span>
+                        <span id="statusText">Не подключено</span>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3>Статистика</h3>
+                    <div id="statisticsContainer">
+                        <div class="stat-grid">
+                            <div class="stat-item">
+                                <div class="stat-value" id="totalMessages">0</div>
+                                <div class="stat-label">Всего сообщений</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-value" id="uniqueIds">0</div>
+                                <div class="stat-label">Уникальных ID</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3>Управление</h3>
+                    <button id="clearMessagesBtn" class="btn">Очистить сообщения</button>
+                    <button id="sendTestBtn" class="btn btn-warning" style="margin-top: 10px;">Отправить тестовые
+                        сообщения</button>
+                </div>
+
+                <div class="card">
+                    <h3>Информация о системе</h3>
+                    <div id="systemInfo">
+                        <div><strong>Библиотека:</strong> <span id="libStatus">Загрузка...</span></div>
+                        <div><strong>Версия:</strong> <span id="libVersion">-</span></div>
+                        <div><strong>Каналы:</strong> <span id="availableChannels">-</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="main-content">
+                <div class="tab-container">
+                    <div class="tabs">
+                        <div class="tab active" data-tab="messages">Сообщения CAN</div>
+                        <div class="tab" data-tab="send">Отправка сообщений</div>
+                        <div class="tab" data-tab="errors">Ошибки</div>
+                    </div>
+
+                    <div class="tab-content active" id="messages-tab">
+                        <div class="card">
+                            <h3>CAN Сообщения</h3>
+                            <div class="messages-container">
+                                <table class="message-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Время</th>
+                                            <th>Направление</th>
+                                            <th>ID</th>
+                                            <th>Длина</th>
+                                            <th>Данные</th>
+                                            <th>Флаги</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="messagesTable">
+                                        <tr>
+                                            <td colspan="6" style="text-align: center; padding: 20px; color: #6c757d;">
+                                                Нет сообщений для отображения
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="tab-content" id="send-tab">
+                        <div class="card">
+                            <h3>Отправка CAN сообщений</h3>
+                            <div class="send-message-form">
+                                <input type="text" id="sendId" placeholder="CAN ID (hex)" value="100">
+                                <input type="text" id="sendData" placeholder="Данные (hex, через пробел)"
+                                    value="01 02 03 04">
+                                <button id="sendMessageBtn" class="btn btn-success">Отправить</button>
+                            </div>
+                            <div class="checkbox-group">
+                                <input type="checkbox" id="extendedFrame">
+                                <label for="extendedFrame">Расширенный фрейм (29-bit)</label>
+                            </div>
+                            <div class="checkbox-group">
+                                <input type="checkbox" id="remoteFrame">
+                                <label for="remoteFrame">Remote Frame (RTR)</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="tab-content" id="errors-tab">
+                        <div class="card">
+                            <h3>Ошибки CAN шины</h3>
+                            <div id="errorsContainer">
+                                <div style="text-align: center; padding: 20px; color: #6c757d;">
+                                    Нет данных об ошибках
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3>Журнал событий</h3>
+                    <div class="log-output" id="eventLog">
+                        > Система инициализирована
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class CANMonitor {
+            constructor() {
+                this.isConnected = false;
+                this.currentChannel = 0;
+                this.messageLimit = 100;
+                this.autoRefresh = true;
+                this.init();
+            }
+
+            init() {
+                this.bindEvents();
+                this.scanDevices();
+                this.startAutoRefresh();
+                this.addLog('Система инициализирована');
+            }
+
+            bindEvents() {
+                // Подключение/отключение
+                document.getElementById('connectBtn').addEventListener('click', () => this.connect());
+                document.getElementById('disconnectBtn').addEventListener('click', () => this.disconnect());
+
+                // Управление сообщениями
+                document.getElementById('clearMessagesBtn').addEventListener('click', () => this.clearMessages());
+                document.getElementById('sendTestBtn').addEventListener('click', () => this.sendTestMessages());
+                document.getElementById('sendMessageBtn').addEventListener('click', () => this.sendMessage());
+
+                // Вкладки
+                document.querySelectorAll('.tab').forEach(tab => {
+                    tab.addEventListener('click', (e) => this.switchTab(e.target));
+                });
+            }
+
+            async scanDevices() {
+                try {
+                    const response = await fetch('/api/scan_devices');
+                    const data = await response.json();
+
+                    document.getElementById('libStatus').textContent = data.library_loaded ? 'Загружена' : 'Не загружена';
+                    document.getElementById('libVersion').textContent = data.library_version;
+                    document.getElementById('availableChannels').textContent = data.available_channels.join(', ');
+
+                    if (data.available_channels.length > 0) {
+                        const channelSelect = document.getElementById('channelSelect');
+                        channelSelect.innerHTML = '';
+                        data.available_channels.forEach(channel => {
+                            const option = document.createElement('option');
+                            option.value = channel;
+                            option.textContent = `Канал ${channel}`;
+                            channelSelect.appendChild(option);
+                        });
+                    }
+
+                } catch (error) {
+                    this.addLog(`Ошибка сканирования устройств: ${error}`);
+                }
+            }
+
+            async connect() {
+                const channel = document.getElementById('channelSelect').value;
+                const baudRate = document.getElementById('baudRateSelect').value;
+                const testMode = document.getElementById('testModeCheckbox').checked;
+
+                try {
+                    const response = await fetch('/api/connect', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            channel: parseInt(channel),
+                            baud_rate: parseInt(baudRate),
+                            test_mode: testMode
+                        })
+                    });
+
+                    const data = await response.json();
+
+                    if (data.status === 'connected') {
+                        this.isConnected = true;
+                        this.updateConnectionUI(true);
+                        this.addLog(`Подключено к каналу ${channel}, скорость ${baudRate} bps`);
+                    } else {
+                        this.addLog(`Ошибка подключения: ${data.message}`);
+                        alert(`Ошибка подключения: ${data.message}`);
+                    }
+
+                } catch (error) {
+                    this.addLog(`Ошибка подключения: ${error}`);
+                    alert(`Ошибка подключения: ${error}`);
+                }
+            }
+
+            async disconnect() {
+                try {
+                    const response = await fetch('/api/disconnect', {
+                        method: 'POST'
+                    });
+
+                    const data = await response.json();
+
+                    if (data.status === 'disconnected') {
+                        this.isConnected = false;
+                        this.updateConnectionUI(false);
+                        this.addLog('Устройство отключено');
+                    }
+
+                } catch (error) {
+                    this.addLog(`Ошибка отключения: ${error}`);
+                }
+            }
+
+            updateConnectionUI(connected) {
+                const connectBtn = document.getElementById('connectBtn');
+                const disconnectBtn = document.getElementById('disconnectBtn');
+                const statusDiv = document.getElementById('connectionStatus');
+                const statusText = document.getElementById('statusText');
+                const statusIndicator = statusDiv.querySelector('.status-indicator');
+
+                if (connected) {
+                    connectBtn.style.display = 'none';
+                    disconnectBtn.style.display = 'block';
+                    statusDiv.style.display = 'block';
+                    statusDiv.className = 'alert alert-success';
+                    statusIndicator.className = 'status-indicator status-connected';
+                    statusText.textContent = 'Подключено';
+                } else {
+                    connectBtn.style.display = 'block';
+                    disconnectBtn.style.display = 'none';
+                    statusDiv.style.display = 'block';
+                    statusDiv.className = 'alert alert-error';
+                    statusIndicator.className = 'status-indicator status-disconnected';
+                    statusText.textContent = 'Не подключено';
+                }
+            }
+
+            async refreshMessages() {
+                if (!this.autoRefresh) return;
+
+                try {
+                    const response = await fetch(`/api/messages?limit=${this.messageLimit}`);
+                    const messages = await response.json();
+                    this.updateMessagesTable(messages);
+
+                    // Обновляем статистику
+                    const statsResponse = await fetch('/api/statistics');
+                    const stats = await statsResponse.json();
+                    this.updateStatistics(stats);
+
+                    // Обновляем статус
+                    const statusResponse = await fetch('/api/status');
+                    const status = await statusResponse.json();
+
+                    if (status.connected !== this.isConnected) {
+                        this.isConnected = status.connected;
+                        this.updateConnectionUI(status.connected);
+                    }
+
+                } catch (error) {
+                    console.error('Ошибка обновления сообщений:', error);
+                }
+            }
+            
+                updateMessagesTable(messages) {
+                    const tableBody = document.getElementById('messagesTable');
+                
+                    if (messages.length === 0) {
+                        tableBody.innerHTML = `
+                <tr>
+                    <td colspan="6" style="text-align: center; padding: 20px; color: #6c757d;">
+                        Нет сообщений для отображения
+                    </td>
+                </tr>
+            `;
+                        return;
+                    }
+                
+                    tableBody.innerHTML = messages.map(msg => `
+            <tr>
+                <td>${msg.timestamp_str || 'Н/Д'}</td>
+                <td>
+                    <span class="message-direction-${msg.direction.toLowerCase()}">
+                        ${this.getDirectionIcon(msg.direction)} ${msg.direction}
+                    </span>
+                </td>
+                <td class="message-id">${msg.id_hex}</td>
+                <td>${msg.length}</td>
+                <td class="message-data">${msg.data_hex}</td>
+                <td>
+                    ${msg.is_rtr ? 'RTR ' : ''}
+                    ${msg.is_eff ? 'EXT ' : ''}
+                </td>
+            </tr>
+        `).join('');
+            }
+
+            getDirectionIcon(direction) {
+                switch (direction) {
+                    case 'RX': return '📥';
+                    case 'TX': return '📤';
+                    case 'ER': return '⚠️';
+                    default: return '🔸';
+                }
+            }
+
+            updateStatistics(stats) {
+                document.getElementById('totalMessages').textContent = stats.total_messages || 0;
+                document.getElementById('uniqueIds').textContent = Object.keys(stats.by_id || {}).length;
+            }
+
+            async clearMessages() {
+                try {
+                    await fetch('/api/messages/clear', { method: 'POST' });
+                    this.addLog('Сообщения очищены');
+                    this.refreshMessages();
+                } catch (error) {
+                    this.addLog(`Ошибка очистки сообщений: ${error}`);
+                }
+            }
+
+            async sendTestMessages() {
+                if (!this.isConnected) {
+                    alert('Сначала подключитесь к устройству');
+                    return;
+                }
+
+                try {
+                    const response = await fetch('/api/send_test_messages', {
+                        method: 'POST'
+                    });
+
+                    const data = await response.json();
+                    this.addLog(data.message);
+
+                } catch (error) {
+                    this.addLog(`Ошибка отправки тестовых сообщений: ${error}`);
+                }
+            }
+
+            async sendMessage() {
+                if (!this.isConnected) {
+                    alert('Сначала подключитесь к устройству');
+                    return;
+                }
+
+                const idInput = document.getElementById('sendId').value;
+                const dataInput = document.getElementById('sendData').value;
+                const extended = document.getElementById('extendedFrame').checked;
+                const rtr = document.getElementById('remoteFrame').checked;
+
+                // Парсим CAN ID
+                let canId;
+                if (idInput.startsWith('0x')) {
+                    canId = parseInt(idInput.substring(2), 16);
+                } else {
+                    canId = parseInt(idInput, 16);
+                }
+
+                if (isNaN(canId)) {
+                    alert('Неверный формат CAN ID');
+                    return;
+                }
+
+                // Парсим данные
+                const dataBytes = dataInput.split(' ')
+                    .filter(byte => byte.trim() !== '')
+                    .map(byte => {
+                        if (byte.startsWith('0x')) {
+                            return parseInt(byte.substring(2), 16);
+                        } else {
+                            return parseInt(byte, 16);
+                        }
+                    })
+                    .filter(byte => !isNaN(byte) && byte >= 0 && byte <= 255);
+
+                try {
+                    const response = await fetch('/api/send_message', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            id: canId,
+                            data: dataBytes,
+                            extended: extended,
+                            rtr: rtr
+                        })
+                    });
+
+                    const data = await response.json();
+
+                    if (data.status === 'sent') {
+                        this.addLog(`Сообщение отправлено: ID=0x${canId.toString(16).toUpperCase()}`);
+                    } else {
+                        this.addLog(`Ошибка отправки: ${data.message}`);
+                    }
+
+                } catch (error) {
+                    this.addLog(`Ошибка отправки сообщения: ${error}`);
+                }
+            }
+
+            switchTab(tabElement) {
+                // Скрываем все вкладки
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+
+                // Активируем выбранную вкладку
+                tabElement.classList.add('active');
+                const tabId = tabElement.getAttribute('data-tab');
+                document.getElementById(`${tabId}-tab`).classList.add('active');
+            }
+
+            addLog(message) {
+                const logElement = document.getElementById('eventLog');
+                const timestamp = new Date().toLocaleTimeString();
+                logElement.innerHTML += `\n> [${timestamp}] ${message}`;
+                logElement.scrollTop = logElement.scrollHeight;
+            }
+
+            startAutoRefresh() {
+                setInterval(() => this.refreshMessages(), 1000);
+            }
+        }
+
+        // Инициализация при загрузке страницы
+        document.addEventListener('DOMContentLoaded', () => {
+            window.canMonitor = new CANMonitor();
+        });
+    </script>
+</body>
+
+</html>

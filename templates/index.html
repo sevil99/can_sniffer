@@ -1,0 +1,708 @@
+<!-- templates/index.html -->
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CAN-USB Монитор с CHAI</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        /* Стили остаются такими же как в предыдущей версии */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #2c3e50, #34495e);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .control-panel {
+            padding: 30px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e9ecef;
+            display: grid;
+            grid-template-columns: auto auto 1fr;
+            gap: 20px;
+            align-items: center;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            margin: 5px;
+        }
+
+        .btn-primary {
+            background: #3498db;
+            color: white;
+        }
+
+        .btn-success {
+            background: #27ae60;
+            color: white;
+        }
+
+        .btn-danger {
+            background: #e74c3c;
+            color: white;
+        }
+
+        .btn-warning {
+            background: #f39c12;
+            color: white;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .status-connected {
+            background: #27ae60;
+            animation: pulse 2s infinite;
+        }
+
+        .status-disconnected {
+            background: #e74c3c;
+        }
+
+        @keyframes pulse {
+            0% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
+
+            100% {
+                opacity: 1;
+            }
+        }
+
+        .content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            padding: 30px;
+        }
+
+        @media (max-width: 968px) {
+            .content {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .card {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e9ecef;
+        }
+
+        .card h3 {
+            color: #2c3e50;
+            margin-bottom: 15px;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+        }
+
+        .messages-container {
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+        }
+
+        .message-item {
+            padding: 8px;
+            border-bottom: 1px solid #ecf0f1;
+            display: grid;
+            grid-template-columns: 80px 60px 80px 1fr;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .message-item:nth-child(even) {
+            background: #f8f9fa;
+        }
+
+        .message-time {
+            color: #7f8c8d;
+            font-size: 0.8em;
+        }
+
+        .message-id {
+            color: #e74c3c;
+            font-weight: bold;
+        }
+
+        .message-data {
+            color: #3498db;
+        }
+
+        .message-flags {
+            color: #95a5a6;
+            font-size: 0.8em;
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        label {
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        input,
+        select,
+        textarea {
+            padding: 10px;
+            border: 2px solid #bdc3c7;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+
+        input:focus,
+        select:focus,
+        textarea:focus {
+            border-color: #3498db;
+            outline: none;
+        }
+
+        .statistics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .stat-item {
+            background: #ecf0f1;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+
+        .stat-label {
+            font-size: 0.9em;
+            color: #7f8c8d;
+        }
+
+        .error-item {
+            background: #ffeaa7;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 5px 0;
+        }
+
+        .device-list {
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #bdc3c7;
+            border-radius: 5px;
+            padding: 10px;
+        }
+
+        .device-item {
+            padding: 8px;
+            border-bottom: 1px solid #ecf0f1;
+        }
+
+        .device-item:last-child {
+            border-bottom: none;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚗 CAN-USB Монитор с CHAI</h1>
+            <p>Реальный мониторинг CAN-шины через библиотеку CHAI 2.14.0</p>
+        </div>
+
+        <div class="control-panel">
+            <div>
+                <button class="btn btn-warning" onclick="scanDevices()">Сканировать устройства</button>
+                <button class="btn btn-success" onclick="showConnectDialog()">Подключиться</button>
+                <button class="btn btn-danger" onclick="disconnectDevice()">Отключиться</button>
+            </div>
+            <div>
+                <button class="btn btn-primary" onclick="clearMessages()">Очистить сообщения</button>
+                <button class="btn btn-primary" onclick="showSendDialog()">Отправить сообщение</button>
+            </div>
+            <div id="statusText" style="text-align: right; font-weight: bold;">
+                Статус: Отключено | CHAI: <span id="chaiStatus">Не загружена</span>
+            </div>
+        </div>
+
+        <div class="content">
+            <!-- Левая колонка -->
+            <div>
+                <div class="card">
+                    <h3>🔍 Обнаруженные устройства</h3>
+                    <div id="devicesList" class="device-list">
+                        <!-- Список устройств будет здесь -->
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3>📊 Статистика CAN-шины</h3>
+                    <div id="statistics" class="statistics-grid">
+                        <!-- Статистика будет загружена здесь -->
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3>⚠️ Ошибки CAN</h3>
+                    <div id="errorsContainer">
+                        <!-- Ошибки будут здесь -->
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3>📈 Графики данных</h3>
+                    <div style="margin-bottom: 15px;">
+                        <label for="plotCanId">CAN ID для графика:</label>
+                        <input type="text" id="plotCanId" placeholder="100" value="100" style="width: 100px;">
+                        <button class="btn btn-primary" onclick="updatePlot()">Обновить график</button>
+                    </div>
+                    <img id="plotImage" src="" alt="График данных"
+                        style="max-width: 100%; border: 1px solid #ddd; border-radius: 5px;">
+                </div>
+            </div>
+
+            <!-- Правая колонка -->
+            <div>
+                <div class="card">
+                    <h3>📨 CAN сообщения</h3>
+                    <div style="margin-bottom: 10px;">
+                        <label>
+                            <input type="checkbox" id="autoScroll" checked> Автопрокрутка
+                        </label>
+                        <span style="float: right;">Сообщений: <span id="messageCount">0</span></span>
+                    </div>
+                    <div class="messages-container" id="messagesContainer">
+                        <!-- Сообщения будут загружены здесь -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Диалог подключения -->
+    <div id="connectDialog"
+        style="display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 30px; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); z-index: 1000; min-width: 400px;">
+        <h3 style="margin-bottom: 20px;">Подключение к CAN устройству</h3>
+        <div class="form-group">
+            <label for="connectChannel">CAN Канал:</label>
+            <select id="connectChannel">
+                <option value="0">Канал 0</option>
+                <option value="1">Канал 1</option>
+                <option value="2">Канал 2</option>
+                <option value="3">Канал 3</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="connectBaudrate">Скорость (bps):</label>
+            <select id="connectBaudrate">
+                <option value="10000">10,000</option>
+                <option value="20000">20,000</option>
+                <option value="50000">50,000</option>
+                <option value="100000">100,000</option>
+                <option value="125000">125,000</option>
+                <option value="250000" selected>250,000</option>
+                <option value="500000">500,000</option>
+                <option value="800000">800,000</option>
+                <option value="1000000">1,000,000</option>
+            </select>
+        </div>
+        <div style="margin-top: 20px; text-align: right;">
+            <button class="btn btn-danger" onclick="hideConnectDialog()">Отмена</button>
+            <button class="btn btn-success" onclick="connectDevice()">Подключиться</button>
+        </div>
+    </div>
+
+    <!-- Диалог отправки сообщения -->
+    <div id="sendDialog"
+        style="display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 30px; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); z-index: 1000; min-width: 400px;">
+        <h3 style="margin-bottom: 20px;">Отправка CAN сообщения</h3>
+        <div class="form-grid">
+            <div class="form-group">
+                <label for="sendCanId">CAN ID (hex):</label>
+                <input type="text" id="sendCanId" placeholder="100" value="100">
+            </div>
+            <div class="form-group">
+                <label for="sendData">Данные (hex через запятую):</label>
+                <input type="text" id="sendData" placeholder="1,2,3,4" value="1,2,3,4">
+            </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="sendExtended"> Расширенный формат (29-bit)
+                </label>
+            </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="sendRtr"> RTR кадр
+                </label>
+            </div>
+        </div>
+        <div style="margin-top: 20px; text-align: right;">
+            <button class="btn btn-danger" onclick="hideSendDialog()">Отмена</button>
+            <button class="btn btn-success" onclick="sendCustomMessage()">Отправить</button>
+        </div>
+    </div>
+
+    <!-- Overlay для диалогов -->
+    <div id="overlay"
+        style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 999;">
+    </div>
+
+    <script>
+        let isConnected = false;
+        let updateInterval;
+        let libraryVersion = "Unknown";
+
+        // Диалоги
+        function showConnectDialog() {
+            document.getElementById('connectDialog').style.display = 'block';
+            document.getElementById('overlay').style.display = 'block';
+        }
+
+        function hideConnectDialog() {
+            document.getElementById('connectDialog').style.display = 'none';
+            document.getElementById('overlay').style.display = 'none';
+        }
+
+        function showSendDialog() {
+            if (!isConnected) {
+                alert('Сначала подключитесь к устройству!');
+                return;
+            }
+            document.getElementById('sendDialog').style.display = 'block';
+            document.getElementById('overlay').style.display = 'block';
+        }
+
+        function hideSendDialog() {
+            document.getElementById('sendDialog').style.display = 'none';
+            document.getElementById('overlay').style.display = 'none';
+        }
+
+        // Функции управления устройством
+        async function scanDevices() {
+            try {
+                const response = await fetch('/api/scan_devices');
+                const devices = await response.json();
+
+                const container = document.getElementById('devicesList');
+                if (devices.length > 0) {
+                    container.innerHTML = devices.map(device => `
+                        <div class="device-item">
+                            <strong>${device.name}</strong><br>
+                            Каналы: ${device.channels.filter(ch => ch >= 0).join(', ')}<br>
+                            Производитель: ${device.manufacturer}<br>
+                            Версия: ${device.hwver}
+                        </div>
+                    `).join('');
+                } else {
+                    container.innerHTML = '<div class="device-item">Устройства не найдены</div>';
+                }
+            } catch (error) {
+                console.error('Ошибка сканирования устройств:', error);
+            }
+        }
+
+        async function connectDevice() {
+            const channel = parseInt(document.getElementById('connectChannel').value);
+            const baudrate = parseInt(document.getElementById('connectBaudrate').value);
+
+            try {
+                const response = await fetch('/api/connect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ channel: channel, baud_rate: baudrate })
+                });
+
+                const data = await response.json();
+
+                if (data.status === 'connected') {
+                    isConnected = true;
+                    libraryVersion = data.library_version;
+                    updateStatus();
+                    startAutoUpdate();
+                    hideConnectDialog();
+                    showNotification('Успешно подключено к CAN устройству!', 'success');
+                } else {
+                    showNotification('Ошибка подключения: ' + data.message, 'error');
+                }
+            } catch (error) {
+                showNotification('Ошибка сети: ' + error.message, 'error');
+            }
+        }
+
+        async function disconnectDevice() {
+            try {
+                const response = await fetch('/api/disconnect', { method: 'POST' });
+                const data = await response.json();
+
+                if (data.status === 'disconnected') {
+                    isConnected = false;
+                    updateStatus();
+                    stopAutoUpdate();
+                    showNotification('Устройство отключено', 'info');
+                }
+            } catch (error) {
+                showNotification('Ошибка отключения: ' + error.message, 'error');
+            }
+        }
+
+        // Функции для работы с сообщениями
+        async function sendCustomMessage() {
+            const canId = parseInt(document.getElementById('sendCanId').value, 16);
+            const dataStr = document.getElementById('sendData').value;
+            const data = dataStr.split(',').map(hex => parseInt(hex.trim(), 16));
+            const isExtended = document.getElementById('sendExtended').checked;
+            const isRtr = document.getElementById('sendRtr').checked;
+
+            try {
+                const response = await fetch('/api/send_message', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        id: canId,
+                        data: data,
+                        extended: isExtended,
+                        rtr: isRtr
+                    })
+                });
+
+                const result = await response.json();
+                if (result.status === 'sent') {
+                    showNotification('CAN сообщение отправлено!', 'success');
+                    hideSendDialog();
+                    loadMessages();
+                } else {
+                    showNotification('Ошибка отправки: ' + result.message, 'error');
+                }
+            } catch (error) {
+                showNotification('Ошибка сети: ' + error.message, 'error');
+            }
+        }
+
+        async function loadMessages() {
+            try {
+                const response = await fetch('/api/messages?limit=50');
+                const messages = await response.json();
+
+                const container = document.getElementById('messagesContainer');
+                const messageCount = document.getElementById('messageCount');
+
+                container.innerHTML = '';
+                messageCount.textContent = messages.length;
+
+                messages.reverse().forEach(msg => {
+                    const messageDiv = document.createElement('div');
+                    messageDiv.className = 'message-item';
+
+                    const flags = [];
+                    if (msg.is_rtr) flags.push('RTR');
+                    if (msg.is_eff) flags.push('EFF');
+
+                    messageDiv.innerHTML = `
+                        <div class="message-time">${msg.timestamp_str}</div>
+                        <div class="message-id">0x${msg.id.toString(16).toUpperCase()}</div>
+                        <div class="message-flags">${flags.join(', ')}</div>
+                        <div class="message-data">[${msg.data.map(b => '0x' + b.toString(16).toUpperCase().padStart(2, '0')).join(', ')}]</div>
+                    `;
+                    container.appendChild(messageDiv);
+                });
+
+                // Автопрокрутка
+                if (document.getElementById('autoScroll').checked) {
+                    container.scrollTop = container.scrollHeight;
+                }
+            } catch (error) {
+                console.error('Ошибка загрузки сообщений:', error);
+            }
+        }
+
+        // Функции для статистики и графиков
+        async function loadStatistics() {
+            try {
+                const response = await fetch('/api/statistics');
+                const stats = await response.json();
+
+                const container = document.getElementById('statistics');
+                container.innerHTML = '';
+
+                for (const [canId, data] of Object.entries(stats)) {
+                    const statDiv = document.createElement('div');
+                    statDiv.className = 'stat-item';
+                    statDiv.innerHTML = `
+                        <div class="stat-value">${canId}</div>
+                        <div class="stat-label">Сообщений: ${data.count}</div>
+                        <div class="stat-label">Частота: ${data.frequency.toFixed(2)}/с</div>
+                        <div class="stat-label">Текущее: ${data.last_value}</div>
+                    `;
+                    container.appendChild(statDiv);
+                }
+            } catch (error) {
+                console.error('Ошибка загрузки статистики:', error);
+            }
+        }
+
+        async function loadErrors() {
+            try {
+                const response = await fetch('/api/errors');
+                const errors = await response.json();
+
+                const container = document.getElementById('errorsContainer');
+                container.innerHTML = '';
+
+                for (const [errorType, count] of Object.entries(errors)) {
+                    if (count > 0) {
+                        const errorDiv = document.createElement('div');
+                        errorDiv.className = 'error-item';
+                        errorDiv.innerHTML = `
+                            <strong>${errorType.toUpperCase()}:</strong> ${count} ошибок
+                        `;
+                        container.appendChild(errorDiv);
+                    }
+                }
+
+                if (container.innerHTML === '') {
+                    container.innerHTML = '<div style="color: #27ae60;">Ошибок нет</div>';
+                }
+            } catch (error) {
+                console.error('Ошибка загрузки ошибок:', error);
+            }
+        }
+
+        async function updatePlot() {
+            const canId = parseInt(document.getElementById('plotCanId').value, 16);
+            const plotImg = document.getElementById('plotImage');
+            plotImg.src = `/api/plot/${canId}?t=${new Date().getTime()}`;
+        }
+
+        // Вспомогательные функции
+        function updateStatus() {
+            const statusText = document.getElementById('statusText');
+            const chaiStatus = document.getElementById('chaiStatus');
+
+            if (isConnected) {
+                statusText.innerHTML = 'Статус: <span style="color: #27ae60;">Подключено</span>';
+            } else {
+                statusText.innerHTML = 'Статус: <span style="color: #e74c3c;">Отключено</span>';
+            }
+
+            chaiStatus.textContent = libraryVersion;
+        }
+
+        function clearMessages() {
+            // В реальной реализации здесь будет очистка сообщений на сервере
+            document.getElementById('messagesContainer').innerHTML = '';
+            document.getElementById('messageCount').textContent = '0';
+            showNotification('Сообщения очищены', 'info');
+        }
+
+        function showNotification(message, type = 'info') {
+            // Простая реализация уведомлений
+            const color = type === 'error' ? '#e74c3c' : type === 'success' ? '#27ae60' : '#3498db';
+            alert(`%c${type.toUpperCase()}: ${message}`, `color: ${color}; font-weight: bold;`);
+        }
+
+        // Автоматическое обновление
+        function startAutoUpdate() {
+            updateInterval = setInterval(() => {
+                if (isConnected) {
+                    loadMessages();
+                    loadStatistics();
+                    loadErrors();
+                }
+            }, 1000);
+        }
+
+        function stopAutoUpdate() {
+            if (updateInterval) {
+                clearInterval(updateInterval);
+            }
+        }
+
+        // Инициализация
+        document.addEventListener('DOMContentLoaded', function () {
+            updateStatus();
+            scanDevices();
+
+            // Загружаем начальный статус
+            fetch('/api/status')
+                .then(response => response.json())
+                .then(data => {
+                    libraryVersion = data.library_version;
+                    isConnected = data.connected;
+                    updateStatus();
+                    if (isConnected) {
+                        startAutoUpdate();
+                    }
+                });
+        });
+    </script>
+</body>
+
+</html>

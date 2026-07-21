@@ -1,0 +1,6 @@
+# requirements.txt
+flask==2.3.3
+matplotlib==3.7.2
+pyserial==3.5
+python-can==4.2.2
+numpy==1.24.3

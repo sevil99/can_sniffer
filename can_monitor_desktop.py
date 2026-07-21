@@ -977,23 +977,32 @@ class CanMonitorApp:
                 ),
             )
 
-        for child in self.charts_frame.winfo_children():
-            child.destroy()
+        signal_keys = [signal.key for signal in self.signals]
+        active_keys = set(signal_keys)
+        for chart_key in list(self.charts):
+            if chart_key not in active_keys:
+                self.charts.pop(chart_key).destroy()
 
-        self.charts = {}
         if not self.signals:
-            self.empty_charts_label = ttk.Label(
-                self.charts_frame,
-                text="Добавьте сигнал или откройте шаблон проекта, чтобы увидеть графики.",
-                foreground="#64748b",
-            )
             self.empty_charts_label.pack(anchor="w", padx=8, pady=8)
             return
 
+        self.empty_charts_label.pack_forget()
+        ordered_charts: dict[str, SignalChart] = {}
         for index, signal in enumerate(self.signals):
-            chart = SignalChart(self.charts_frame, signal, CHART_COLORS[index % len(CHART_COLORS)])
+            chart = self.charts.get(signal.key)
+            if chart is None:
+                chart = SignalChart(self.charts_frame, signal, CHART_COLORS[index % len(CHART_COLORS)])
+            else:
+                chart.signal = signal
+                chart.color = CHART_COLORS[index % len(CHART_COLORS)]
+                chart.title_var.set(signal.label)
+
+            chart.pack_forget()
             chart.pack(fill=tk.X, expand=True, pady=(0, 10))
-            self.charts[signal.key] = chart
+            ordered_charts[signal.key] = chart
+
+        self.charts = ordered_charts
 
     def _poll_queues(self) -> None:
         if self._closing:

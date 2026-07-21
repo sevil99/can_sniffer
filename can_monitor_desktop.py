@@ -13,10 +13,15 @@ from typing import Any
 
 from built_in_templates import (
     BUILT_IN_TEMPLATES,
+    GAS_REGULATOR_BAUD_RATE_DEFAULT,
+    GAS_REGULATOR_DEVICE_ID_DEFAULT,
+    GAS_REGULATOR_HISTORY_SECONDS_DEFAULT,
     MID_BAUD_RATE_DEFAULT,
     MID_CYLINDERS,
     MID_HISTORY_SECONDS_DEFAULT,
     MID_METRIC_LABELS,
+    PID_IDS,
+    build_gas_regulator_template,
     build_mid_template,
     default_mid_selection,
 )
@@ -28,6 +33,7 @@ from can_signal import (
     SignalDefinition,
     get_message_id_string,
     normalize_can_id,
+    parse_can_id,
     parse_message_signals,
 )
 from session_logger import CsvSessionLogger
@@ -553,6 +559,10 @@ class CanMonitorApp:
             parent.destroy()
             self._show_mid_template_dialog()
             return
+        if key == "gas_regulator":
+            parent.destroy()
+            self._show_gas_regulator_template_dialog()
+            return
 
         messagebox.showerror("Шаблон", f"Неизвестный встроенный шаблон: {key}", parent=parent)
 
@@ -656,15 +666,11 @@ class CanMonitorApp:
 
         buttons = ttk.Frame(root_frame)
         buttons.grid(row=4, column=0, sticky="ew", pady=(12, 0))
-        buttons.columnconfigure((0, 1, 2, 3, 4), weight=1)
+        buttons.columnconfigure((0, 1, 2, 3), weight=1)
 
         def set_all(value: bool) -> None:
             for var in variables.values():
                 var.set(value)
-
-        def set_metric(metric_key: str, value: bool) -> None:
-            for cylinder, _base_id in MID_CYLINDERS:
-                variables[(cylinder, metric_key)].set(value)
 
         def apply_mid() -> None:
             selected: dict[str, set[str]] = {}
@@ -693,14 +699,120 @@ class CanMonitorApp:
 
         ttk.Button(buttons, text="Все", command=lambda: set_all(True)).grid(row=0, column=0, sticky="ew", padx=(0, 4))
         ttk.Button(buttons, text="Снять", command=lambda: set_all(False)).grid(row=0, column=1, sticky="ew", padx=4)
-        ttk.Button(buttons, text="Только детонация", command=lambda: (set_all(False), set_metric("knock", True))).grid(
+        ttk.Button(buttons, text="Открыть", command=apply_mid).grid(row=0, column=2, sticky="ew", padx=4)
+        ttk.Button(buttons, text="Отмена", command=dialog.destroy).grid(row=0, column=3, sticky="ew", padx=(4, 0))
+
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        dialog.wait_visibility()
+        dialog.focus()
+
+    def _show_gas_regulator_template_dialog(self) -> None:
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Встроенный шаблон: Регулятор газа")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+
+        variables: dict[int, tk.BooleanVar] = {}
+        device_id_var = tk.StringVar(value=f"0x{GAS_REGULATOR_DEVICE_ID_DEFAULT:03X}")
+        channel_var = tk.StringVar(value=self.channel_var.get())
+        baud_var = tk.StringVar(value=str(GAS_REGULATOR_BAUD_RATE_DEFAULT))
+        history_var = tk.IntVar(value=GAS_REGULATOR_HISTORY_SECONDS_DEFAULT)
+
+        root_frame = ttk.Frame(dialog, padding=12)
+        root_frame.pack(fill=tk.BOTH, expand=True)
+        root_frame.columnconfigure(0, weight=1)
+
+        ttk.Label(root_frame, text="Регулятор газа", font=("Segoe UI", 12, "bold")).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            root_frame,
+            text="Выберите PID-параметры, которые нужно вывести на графики.",
+            foreground="#64748b",
+        ).grid(row=1, column=0, sticky="w", pady=(2, 10))
+
+        params = ttk.Frame(root_frame)
+        params.grid(row=2, column=0, sticky="ew")
+        params.columnconfigure(1, weight=1)
+        params.columnconfigure(3, weight=1)
+
+        ttk.Label(params, text="CAN ID устройства").grid(row=0, column=0, sticky="w", padx=(0, 4), pady=3)
+        ttk.Entry(params, textvariable=device_id_var, width=12).grid(row=0, column=1, sticky="w", padx=(0, 12), pady=3)
+        ttk.Label(params, text="Канал").grid(row=0, column=2, sticky="w", padx=(0, 4), pady=3)
+        ttk.Combobox(params, textvariable=channel_var, values=("0", "1"), state="readonly", width=5).grid(
             row=0,
-            column=2,
-            sticky="ew",
-            padx=4,
+            column=3,
+            sticky="w",
+            pady=3,
         )
-        ttk.Button(buttons, text="Открыть", command=apply_mid).grid(row=0, column=3, sticky="ew", padx=4)
-        ttk.Button(buttons, text="Отмена", command=dialog.destroy).grid(row=0, column=4, sticky="ew", padx=(4, 0))
+        ttk.Label(params, text="Скорость").grid(row=1, column=0, sticky="w", padx=(0, 4), pady=3)
+        ttk.Combobox(params, textvariable=baud_var, values=BAUD_RATES, state="readonly", width=10).grid(
+            row=1,
+            column=1,
+            sticky="w",
+            padx=(0, 12),
+            pady=3,
+        )
+        ttk.Label(params, text="История, сек").grid(row=1, column=2, sticky="w", padx=(0, 4), pady=3)
+        ttk.Spinbox(params, from_=10, to=3600, increment=10, textvariable=history_var, width=7).grid(
+            row=1,
+            column=3,
+            sticky="w",
+            pady=3,
+        )
+
+        table = ttk.Frame(root_frame)
+        table.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+        for column in range(3):
+            table.columnconfigure(column, weight=1)
+
+        for index, (pid_id, name) in enumerate(PID_IDS.items()):
+            row = index // 3
+            column = index % 3
+            var = tk.BooleanVar(value=False)
+            variables[pid_id] = var
+            ttk.Checkbutton(table, text=f"0x{pid_id:02X} {name}", variable=var).grid(
+                row=row,
+                column=column,
+                sticky="w",
+                padx=(0, 12),
+                pady=3,
+            )
+
+        buttons = ttk.Frame(root_frame)
+        buttons.grid(row=4, column=0, sticky="ew", pady=(12, 0))
+        buttons.columnconfigure((0, 1, 2, 3), weight=1)
+
+        def set_all(value: bool) -> None:
+            for var in variables.values():
+                var.set(value)
+
+        def apply_gas_regulator() -> None:
+            selected_pid_ids = {pid_id for pid_id, var in variables.items() if var.get()}
+            if not selected_pid_ids:
+                messagebox.showwarning("Регулятор газа", "Выберите хотя бы один PID-параметр.", parent=dialog)
+                return
+
+            try:
+                device_id = parse_can_id(device_id_var.get())
+            except ValueError as error:
+                messagebox.showerror("Регулятор газа", str(error), parent=dialog)
+                return
+
+            template = build_gas_regulator_template(
+                selected_pid_ids=selected_pid_ids,
+                device_id=device_id,
+                channel=int(channel_var.get()),
+                baud_rate=int(baud_var.get()),
+                history_seconds=int(history_var.get()),
+            )
+            self._apply_template(template)
+            self.status_var.set(f"Открыт шаблон регулятора газа: {len(template.signals)} сигналов")
+            dialog.destroy()
+
+        ttk.Button(buttons, text="Все", command=lambda: set_all(True)).grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        ttk.Button(buttons, text="Снять", command=lambda: set_all(False)).grid(row=0, column=1, sticky="ew", padx=4)
+        ttk.Button(buttons, text="Открыть", command=apply_gas_regulator).grid(row=0, column=2, sticky="ew", padx=4)
+        ttk.Button(buttons, text="Отмена", command=dialog.destroy).grid(row=0, column=3, sticky="ew", padx=(4, 0))
 
         dialog.bind("<Escape>", lambda _event: dialog.destroy())
         dialog.wait_visibility()

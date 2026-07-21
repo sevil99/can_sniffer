@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+
+sessions/
+can_messages_*.json
+json_can_msg_*/
+csv_can_msg_*/
+image*.png

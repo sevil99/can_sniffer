@@ -8,7 +8,7 @@ import re
 import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-from typing import Any
+from typing import Any, Callable
 
 
 def import_pandas():
@@ -52,6 +52,9 @@ from can_signal import ProjectTemplate, parse_can_id, parse_message_signals  # n
 from template_registry import list_template_infos  # noqa: E402
 
 
+ProgressCallback = Callable[[str, float | None], None]
+
+
 ID_COL_CANDIDATES = (
     "CAN_ID_Hex",
     "CAN_ID_Dec",
@@ -73,6 +76,11 @@ RAW_LOG_RE = re.compile(
 
 def console_status(message: str) -> None:
     print(f"[decoder] {message}", flush=True)
+
+
+def report_progress(progress: ProgressCallback | None, message: str, fraction: float | None = None) -> None:
+    if progress is not None:
+        progress(message, fraction)
 
 
 def bring_to_front(window: tk.Misc) -> None:
@@ -169,10 +177,12 @@ def discover_columns(df: pd.DataFrame) -> TableColumns:
     )
 
 
-def read_input_files(paths: list[str | Path]) -> pd.DataFrame:
+def read_input_files(paths: list[str | Path], progress: ProgressCallback | None = None) -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
-    for raw_path in paths:
+    total_files = len(paths)
+    for file_index, raw_path in enumerate(paths, start=1):
         path = Path(raw_path)
+        report_progress(progress, f"Читаю файл {file_index}/{total_files}: {path.name}", None)
         if path.suffix.lower() in (".xlsx", ".xls", ".xlsm"):
             sheets = pd.read_excel(path, sheet_name=None)
             for sheet_name, sheet_df in sheets.items():
@@ -190,7 +200,9 @@ def read_input_files(paths: list[str | Path]) -> pd.DataFrame:
 
     if not frames:
         raise ValueError("Не найдено строк для расшифровки.")
-    return pd.concat(frames, ignore_index=True)
+    result = pd.concat(frames, ignore_index=True)
+    report_progress(progress, f"Прочитано строк: {len(result)}", None)
+    return result
 
 
 def read_csv_file(path: Path) -> pd.DataFrame:
@@ -400,15 +412,59 @@ def signals_for_channel(template: ProjectTemplate, channel: int, cache: dict[int
     return cache[channel]
 
 
-def decode_dataframe(df: pd.DataFrame, template: ProjectTemplate) -> tuple[pd.DataFrame, pd.DataFrame]:
+def filter_template_signals(template: ProjectTemplate, selected_names: set[str] | None) -> ProjectTemplate:
+    if selected_names is None:
+        return template
+
+    selected = {name.strip() for name in selected_names if name.strip()}
+    signals = [
+        signal
+        for signal in template.signals
+        if signal.name in selected or signal.key in selected or signal.label in selected
+    ]
+    if not signals:
+        raise ValueError("Не выбран ни один сигнал для расшифровки.")
+
+    return ProjectTemplate(
+        name=template.name,
+        channel=template.channel,
+        baud_rate=template.baud_rate,
+        history_seconds=template.history_seconds,
+        signals=signals,
+    )
+
+
+def parse_signal_filter(value: str | None) -> set[str] | None:
+    if value is None:
+        return None
+    selected = {part.strip() for part in value.split(",") if part.strip()}
+    if not selected:
+        raise ValueError("Список --signals пуст.")
+    return selected
+
+
+def decode_dataframe(
+    df: pd.DataFrame,
+    template: ProjectTemplate,
+    progress: ProgressCallback | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     columns = discover_columns(df)
     if not columns.message_id and not columns.data and not any(columns.byte_columns):
         raise ValueError(f"Не найдены колонки с CAN ID/данными. Колонки файла: {list(df.columns)}")
 
     signal_cache: dict[int, list[Any]] = {}
     rows: list[dict[str, Any]] = []
+    total_rows = len(df)
+    report_progress(progress, f"Расшифровываю строки: 0/{total_rows}", 0.0 if total_rows else None)
 
     for row_index, row in df.iterrows():
+        if row_index and row_index % 5000 == 0:
+            report_progress(
+                progress,
+                f"Расшифровываю строки: {row_index}/{total_rows}",
+                row_index / total_rows if total_rows else None,
+            )
+
         channel = parse_channel(row.get(columns.channel), template.channel) if columns.channel else template.channel
         signals = signals_for_channel(template, channel, signal_cache)
         signal_by_key = {signal.key: signal for signal in signals}
@@ -438,6 +494,7 @@ def decode_dataframe(df: pd.DataFrame, template: ProjectTemplate) -> tuple[pd.Da
     if decoded.empty:
         raise ValueError("В выбранных файлах не найдено сообщений, подходящих под выбранный шаблон.")
 
+    report_progress(progress, f"Формирую таблицы Excel: найдено значений {len(decoded)}", 0.95)
     decoded = add_time_seconds(decoded)
     wide = (
         decoded.pivot_table(index="TimeSec", columns="Signal", values="Value", aggfunc="last")
@@ -446,6 +503,7 @@ def decode_dataframe(df: pd.DataFrame, template: ProjectTemplate) -> tuple[pd.Da
         .reset_index()
     )
     wide.columns.name = None
+    report_progress(progress, "Расшифровка завершена", 1.0)
     return wide, decoded.sort_values(["TimeSec", "Signal"]).reset_index(drop=True)
 
 
@@ -469,19 +527,29 @@ def add_time_seconds(decoded: pd.DataFrame) -> pd.DataFrame:
     return decoded
 
 
-def convert_files_to_excel(input_paths: list[str | Path], template_path: str | Path, output_path: str | Path) -> None:
+def convert_files_to_excel(
+    input_paths: list[str | Path],
+    template_path: str | Path,
+    output_path: str | Path,
+    selected_signals: set[str] | None = None,
+    progress: ProgressCallback | None = None,
+) -> None:
+    report_progress(progress, "Загружаю шаблон", None)
     template = ProjectTemplate.load(template_path)
-    source = read_input_files(input_paths)
-    wide, decoded = decode_dataframe(source, template)
+    template = filter_template_signals(template, selected_signals)
+    source = read_input_files(input_paths, progress=progress)
+    wide, decoded = decode_dataframe(source, template, progress=progress)
 
+    report_progress(progress, f"Записываю Excel: {output_path}", None)
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         wide.to_excel(writer, sheet_name="data", index=False)
         decoded.to_excel(writer, sheet_name="decoded_long", index=False)
+    report_progress(progress, "Excel сохранен", 1.0)
 
 
 def run_cli(argv: list[str]) -> None:
     parser = argparse.ArgumentParser(description="Decode CAN logs to Excel.")
-    parser.add_argument("files", nargs="+", help="CSV/Excel CAN log files")
+    parser.add_argument("files", nargs="*", help="CSV/Excel CAN log files")
     parser.add_argument(
         "-t",
         "--template",
@@ -489,16 +557,48 @@ def run_cli(argv: list[str]) -> None:
         help="JSON template path. Default: templates/gas_regulator.json",
     )
     parser.add_argument("-o", "--output", help="Output .xlsx path")
+    parser.add_argument(
+        "-s",
+        "--signals",
+        help="Comma-separated signal names to decode, for example: PV,SP,CV",
+    )
+    parser.add_argument("--list-signals", action="store_true", help="Print signals from template and exit")
     args = parser.parse_args(argv)
 
     template_path = Path(args.template)
     output_path = Path(args.output) if args.output else Path(f"{template_path.stem}_decoded.xlsx")
+    template = ProjectTemplate.load(template_path)
+
+    if args.list_signals:
+        for signal in template.signals:
+            print(signal.name)
+        return
+
+    if not args.files:
+        parser.error("files are required unless --list-signals is used")
+
+    selected_signals = parse_signal_filter(args.signals)
+
+    last_percent = -1
+
+    def cli_progress(message: str, fraction: float | None) -> None:
+        nonlocal last_percent
+        if fraction is None:
+            console_status(message)
+            return
+
+        percent = int(max(0.0, min(1.0, fraction)) * 100)
+        if percent == 100 or percent >= last_percent + 5:
+            last_percent = percent
+            console_status(f"{message} ({percent}%)")
 
     console_status(f"Python: {sys.executable}")
     console_status(f"Файлов: {len(args.files)}")
     console_status(f"Шаблон: {template_path}")
+    if selected_signals is not None:
+        console_status(f"Сигналы: {', '.join(sorted(selected_signals))}")
     console_status(f"Выходной файл: {output_path}")
-    convert_files_to_excel(args.files, template_path, output_path)
+    convert_files_to_excel(args.files, template_path, output_path, selected_signals=selected_signals, progress=cli_progress)
     console_status("Готово")
 
 
@@ -561,6 +661,89 @@ def choose_template(root: tk.Tk) -> Path | None:
     return result["path"]
 
 
+def choose_signals(root: tk.Tk, template: ProjectTemplate) -> set[str] | None:
+    result: dict[str, set[str] | None] = {"signals": None}
+
+    dialog = tk.Toplevel(root)
+    dialog.title("Выберите сигналы")
+    dialog.transient(root)
+    dialog.geometry("540x620")
+    dialog.minsize(440, 420)
+
+    root_frame = ttk.Frame(dialog, padding=12)
+    root_frame.pack(fill=tk.BOTH, expand=True)
+    root_frame.columnconfigure(0, weight=1)
+    root_frame.rowconfigure(2, weight=1)
+
+    title_var = tk.StringVar(value=f"Сигналы шаблона: {template.name}")
+    count_var = tk.StringVar()
+
+    ttk.Label(root_frame, textvariable=title_var, font=("Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
+    ttk.Label(root_frame, textvariable=count_var, foreground="#64748b").grid(row=1, column=0, sticky="w", pady=(2, 8))
+
+    shell = ttk.Frame(root_frame)
+    shell.grid(row=2, column=0, sticky="nsew")
+    shell.columnconfigure(0, weight=1)
+    shell.rowconfigure(0, weight=1)
+
+    canvas = tk.Canvas(shell, highlightthickness=0)
+    scrollbar = ttk.Scrollbar(shell, orient=tk.VERTICAL, command=canvas.yview)
+    canvas.configure(yscrollcommand=scrollbar.set)
+    canvas.grid(row=0, column=0, sticky="nsew")
+    scrollbar.grid(row=0, column=1, sticky="ns")
+
+    list_frame = ttk.Frame(canvas, padding=(0, 0, 8, 0))
+    list_window = canvas.create_window((0, 0), window=list_frame, anchor="nw")
+    list_frame.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
+    canvas.bind("<Configure>", lambda event: canvas.itemconfigure(list_window, width=event.width))
+
+    variables: dict[str, tk.BooleanVar] = {}
+    for row, signal in enumerate(template.signals):
+        var = tk.BooleanVar(value=False)
+        variables[signal.name] = var
+        ttk.Checkbutton(list_frame, text=signal.label, variable=var, command=lambda: update_count()).grid(
+            row=row,
+            column=0,
+            sticky="w",
+            pady=2,
+        )
+
+    buttons = ttk.Frame(root_frame)
+    buttons.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+    buttons.columnconfigure((0, 1, 2, 3), weight=1)
+
+    def update_count() -> None:
+        selected_count = sum(1 for var in variables.values() if var.get())
+        count_var.set(f"Выбрано: {selected_count} из {len(variables)}")
+
+    def set_all(value: bool) -> None:
+        for var in variables.values():
+            var.set(value)
+        update_count()
+
+    def apply_selection() -> None:
+        selected = {name for name, var in variables.items() if var.get()}
+        if not selected:
+            messagebox.showwarning("Сигналы", "Выберите хотя бы один сигнал.", parent=dialog)
+            return
+        result["signals"] = selected
+        dialog.destroy()
+
+    ttk.Button(buttons, text="Все", command=lambda: set_all(True)).grid(row=0, column=0, sticky="ew", padx=(0, 4))
+    ttk.Button(buttons, text="Снять", command=lambda: set_all(False)).grid(row=0, column=1, sticky="ew", padx=4)
+    ttk.Button(buttons, text="Продолжить", command=apply_selection).grid(row=0, column=2, sticky="ew", padx=4)
+    ttk.Button(buttons, text="Отмена", command=dialog.destroy).grid(row=0, column=3, sticky="ew", padx=(4, 0))
+
+    update_count()
+    dialog.bind("<Return>", lambda _event: apply_selection())
+    dialog.bind("<Escape>", lambda _event: dialog.destroy())
+    bring_to_front(dialog)
+    dialog.grab_set()
+    dialog.focus_force()
+    root.wait_window(dialog)
+    return result["signals"]
+
+
 def main() -> None:
     if len(sys.argv) > 1:
         run_cli(sys.argv[1:])
@@ -592,6 +775,13 @@ def main() -> None:
             set_status(root, "Шаблон не выбран, выхожу.")
             return
 
+        template = ProjectTemplate.load(template_path)
+        set_status(root, "Открываю выбор сигналов...")
+        selected_signals = choose_signals(root, template)
+        if selected_signals is None:
+            set_status(root, "Сигналы не выбраны, выхожу.")
+            return
+
         set_status(root, "Открываю окно сохранения Excel...")
         bring_to_front(root)
         save_path = filedialog.asksaveasfilename(
@@ -605,8 +795,20 @@ def main() -> None:
             set_status(root, "Путь сохранения не выбран, выхожу.")
             return
 
+        def gui_progress(message: str, fraction: float | None) -> None:
+            if fraction is None:
+                set_status(root, message)
+            else:
+                set_status(root, f"{message} ({int(fraction * 100)}%)")
+
         set_status(root, "Расшифровываю сообщения и записываю Excel...")
-        convert_files_to_excel(sorted(files), template_path, save_path)
+        convert_files_to_excel(
+            sorted(files),
+            template_path,
+            save_path,
+            selected_signals=selected_signals,
+            progress=gui_progress,
+        )
         set_status(root, f"Готово: {save_path}")
         messagebox.showinfo("Готово", f"Файл создан:\n{save_path}", parent=root)
 

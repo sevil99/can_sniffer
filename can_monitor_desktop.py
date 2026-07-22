@@ -161,7 +161,7 @@ class SignalChart(ttk.Frame):
 
         self.canvas = tk.Canvas(self, height=170, background="#ffffff", highlightthickness=1, highlightbackground="#d6dbe1")
         self.canvas.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
-        self.canvas.bind("<Configure>", lambda _event: self.draw(time.time(), 600))
+        self.canvas.bind("<Configure>", lambda _event: self.draw(time.time(), 600, []))
 
     def append(self, timestamp: float, value: float) -> None:
         self.points.append((timestamp, value))
@@ -172,7 +172,7 @@ class SignalChart(ttk.Frame):
         self.value_var.set("нет данных")
         self.canvas.delete("all")
 
-    def draw(self, now: float, history_seconds: int) -> None:
+    def draw(self, now: float, history_seconds: int, markers: list[float]) -> None:
         canvas = self.canvas
         canvas.delete("all")
 
@@ -182,6 +182,8 @@ class SignalChart(ttk.Frame):
         right = width - 14
         top = 12
         bottom = height - 28
+        start_time = now - history_seconds
+        span = max(history_seconds, 1)
 
         canvas.create_rectangle(0, 0, width, height, fill="#ffffff", outline="")
         for index in range(5):
@@ -197,6 +199,8 @@ class SignalChart(ttk.Frame):
         if not recent:
             canvas.create_text(width / 2, height / 2, text="Нет данных", fill="#6b7280", font=("Segoe UI", 10))
             canvas.create_line(left, bottom, right, bottom, fill="#9ca3af")
+            canvas.create_line(left, top, left, bottom, fill="#9ca3af")
+            self._draw_markers(canvas, markers, start_time, span, left, right, top, bottom)
             return
 
         if len(recent) > 1200:
@@ -215,8 +219,6 @@ class SignalChart(ttk.Frame):
             min_value -= padding
             max_value += padding
 
-        start_time = now - history_seconds
-        span = max(history_seconds, 1)
         value_span = max(max_value - min_value, 1e-9)
 
         coords: list[float] = []
@@ -231,12 +233,32 @@ class SignalChart(ttk.Frame):
         canvas.create_text(8, bottom - 12, anchor="nw", text=f"{min_value:.4g}", fill="#475569", font=("Segoe UI", 8))
         canvas.create_text(left, height - 18, anchor="nw", text=f"-{history_seconds}s", fill="#64748b", font=("Segoe UI", 8))
         canvas.create_text(right, height - 18, anchor="ne", text="сейчас", fill="#64748b", font=("Segoe UI", 8))
+        self._draw_markers(canvas, markers, start_time, span, left, right, top, bottom)
 
         if len(coords) >= 4:
             canvas.create_line(*coords, fill=self.color, width=2, smooth=False)
         else:
             x, y = coords
             canvas.create_oval(x - 2, y - 2, x + 2, y + 2, fill=self.color, outline=self.color)
+
+    def _draw_markers(
+        self,
+        canvas: tk.Canvas,
+        markers: list[float],
+        start_time: float,
+        span: float,
+        left: int,
+        right: int,
+        top: int,
+        bottom: int,
+    ) -> None:
+        for marker in markers:
+            if marker < start_time or marker > start_time + span:
+                continue
+            x = left + (marker - start_time) / span * (right - left)
+            canvas.create_line(x, top, x, bottom, fill="#f97316", dash=(4, 3), width=1)
+            label = datetime.fromtimestamp(marker).strftime("%H:%M:%S")
+            canvas.create_text(x + 4, top + 4, anchor="nw", text=label, fill="#c2410c", font=("Segoe UI", 8))
 
 
 class CanMonitorApp:
@@ -261,11 +283,17 @@ class CanMonitorApp:
         self.parsed_points = 0
         self.is_connected = False
         self._message_table_dirty = False
+        self._stats_table_dirty = False
         self._closing = False
+        self.graph_paused = False
+        self.graph_pause_time: float | None = None
+        self.time_markers: list[float] = []
+        self.can_id_stats: dict[str, dict[str, Any]] = {}
 
         self.channel_var = tk.StringVar(value="1")
         self.baud_var = tk.StringVar(value="500000")
         self.history_var = tk.IntVar(value=600)
+        self.graph_state_var = tk.StringVar(value="Live")
         self.status_var = tk.StringVar(value="Выберите папку для сессий")
         self.session_var = tk.StringVar(value="Сессия: не выбрана")
         self.count_var = tk.StringVar(value="Сообщений: 0")
@@ -369,22 +397,40 @@ class CanMonitorApp:
 
         graphs_tab = ttk.Frame(notebook)
         messages_tab = ttk.Frame(notebook)
+        stats_tab = ttk.Frame(notebook)
         notebook.add(graphs_tab, text="Графики")
         notebook.add(messages_tab, text="Сообщения")
+        notebook.add(stats_tab, text="Статистика ID")
 
         self._build_graphs_tab(graphs_tab)
         self._build_messages_tab(messages_tab)
+        self._build_stats_tab(stats_tab)
 
     def _build_graphs_tab(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(0, weight=1)
-        parent.rowconfigure(0, weight=1)
+        parent.rowconfigure(1, weight=1)
+
+        graph_toolbar = ttk.Frame(parent, padding=(0, 0, 0, 8))
+        graph_toolbar.grid(row=0, column=0, columnspan=2, sticky="ew")
+        graph_toolbar.columnconfigure(9, weight=1)
+
+        self.pause_graph_button = ttk.Button(graph_toolbar, text="Пауза", command=self.toggle_graph_pause)
+        self.pause_graph_button.grid(row=0, column=0, padx=(0, 4))
+        ttk.Button(graph_toolbar, text="Очистить графики", command=self.clear_graphs).grid(row=0, column=1, padx=4)
+        ttk.Button(graph_toolbar, text="Автомасштаб", command=self.autoscale_graphs).grid(row=0, column=2, padx=4)
+        ttk.Button(graph_toolbar, text="Масштаб +", command=lambda: self.zoom_time_window(0.5)).grid(row=0, column=3, padx=4)
+        ttk.Button(graph_toolbar, text="Масштаб -", command=lambda: self.zoom_time_window(2.0)).grid(row=0, column=4, padx=4)
+        ttk.Button(graph_toolbar, text="Вернуться к live", command=self.return_to_live).grid(row=0, column=5, padx=4)
+        ttk.Button(graph_toolbar, text="Маркер", command=self.add_time_marker).grid(row=0, column=6, padx=4)
+        ttk.Button(graph_toolbar, text="Стереть маркеры", command=self.clear_time_markers).grid(row=0, column=7, padx=4)
+        ttk.Label(graph_toolbar, textvariable=self.graph_state_var).grid(row=0, column=9, sticky="e")
 
         self.charts_canvas = tk.Canvas(parent, background="#f8fafc", highlightthickness=0)
         scrollbar = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=self.charts_canvas.yview)
         self.charts_canvas.configure(yscrollcommand=scrollbar.set)
 
-        self.charts_canvas.grid(row=0, column=0, sticky="nsew")
-        scrollbar.grid(row=0, column=1, sticky="ns")
+        self.charts_canvas.grid(row=1, column=0, sticky="nsew")
+        scrollbar.grid(row=1, column=1, sticky="ns")
 
         self.charts_frame = ttk.Frame(self.charts_canvas, padding=8)
         self.charts_window = self.charts_canvas.create_window((0, 0), window=self.charts_frame, anchor="nw")
@@ -425,6 +471,29 @@ class CanMonitorApp:
         scrollbar = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=self.messages_tree.yview)
         self.messages_tree.configure(yscrollcommand=scrollbar.set)
         self.messages_tree.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+
+    def _build_stats_tab(self, parent: ttk.Frame) -> None:
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(0, weight=1)
+
+        columns = ("id", "ch", "count", "hz", "last", "length", "sample")
+        self.stats_tree = ttk.Treeview(parent, columns=columns, show="headings")
+        for column, title, width in (
+            ("id", "CAN ID", 90),
+            ("ch", "CH", 45),
+            ("count", "Кол-во", 90),
+            ("hz", "Hz", 80),
+            ("last", "Последнее", 150),
+            ("length", "Len", 55),
+            ("sample", "Пример данных", 280),
+        ):
+            self.stats_tree.heading(column, text=title)
+            self.stats_tree.column(column, width=width, anchor=tk.W, stretch=column == "sample")
+
+        scrollbar = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=self.stats_tree.yview)
+        self.stats_tree.configure(yscrollcommand=scrollbar.set)
+        self.stats_tree.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
 
     def _select_initial_session_root(self) -> None:
@@ -1004,6 +1073,65 @@ class CanMonitorApp:
 
         self.charts = ordered_charts
 
+    def toggle_graph_pause(self) -> None:
+        if self.graph_paused:
+            self.return_to_live()
+            return
+
+        self.graph_paused = True
+        self.graph_pause_time = time.time()
+        self.pause_graph_button.configure(text="Продолжить")
+        self._update_graph_state()
+
+    def return_to_live(self) -> None:
+        self.graph_paused = False
+        self.graph_pause_time = None
+        self.pause_graph_button.configure(text="Пауза")
+        self._update_graph_state()
+
+    def clear_graphs(self) -> None:
+        for chart in self.charts.values():
+            chart.clear()
+        self.time_markers.clear()
+        self.status_var.set("Графики очищены")
+        self._update_graph_state()
+
+    def autoscale_graphs(self) -> None:
+        self.status_var.set("Автомасштаб применен")
+        self._update_graph_state()
+        self._redraw_charts_once()
+
+    def zoom_time_window(self, factor: float) -> None:
+        current = max(10, int(self.history_var.get() or 600))
+        updated = int(max(10, min(3600, current * factor)))
+        self.history_var.set(updated)
+        self.status_var.set(f"Окно графиков: {updated} сек")
+        self._update_graph_state()
+        self._redraw_charts_once()
+
+    def add_time_marker(self) -> None:
+        marker_time = self.graph_pause_time if self.graph_paused and self.graph_pause_time is not None else time.time()
+        self.time_markers.append(marker_time)
+        self.status_var.set(f"Маркер добавлен: {datetime.fromtimestamp(marker_time).strftime('%H:%M:%S')}")
+        self._update_graph_state()
+        self._redraw_charts_once()
+
+    def clear_time_markers(self) -> None:
+        self.time_markers.clear()
+        self.status_var.set("Маркеры очищены")
+        self._update_graph_state()
+        self._redraw_charts_once()
+
+    def _update_graph_state(self) -> None:
+        mode = "Пауза" if self.graph_paused else "Live"
+        self.graph_state_var.set(f"{mode} | окно {max(10, int(self.history_var.get() or 600))} сек | маркеров: {len(self.time_markers)}")
+
+    def _redraw_charts_once(self) -> None:
+        history_seconds = max(10, int(self.history_var.get() or 600))
+        now = self.graph_pause_time if self.graph_paused and self.graph_pause_time is not None else time.time()
+        for chart in self.charts.values():
+            chart.draw(now, history_seconds, self.time_markers)
+
     def _poll_queues(self) -> None:
         if self._closing:
             return
@@ -1065,6 +1193,8 @@ class CanMonitorApp:
         if self.logger is not None:
             self.logger.log_message(can_message, channel, parsed)
 
+        self._update_can_id_stats(can_message, channel, timestamp)
+
         for signal_key, value in parsed.items():
             chart = self.charts.get(signal_key)
             if chart is not None:
@@ -1072,6 +1202,42 @@ class CanMonitorApp:
 
         self._remember_discovered_id(can_message, channel)
         self._remember_message_row(can_message, channel, parsed)
+
+    def _update_can_id_stats(self, can_message: Any, channel: int, timestamp: float) -> None:
+        try:
+            can_id = get_message_id_string(can_message)
+        except Exception:
+            can_id = str(getattr(can_message, "id", ""))
+
+        key = f"{can_id}_CH{channel}"
+        data_hex = can_message.get_data_hex() if hasattr(can_message, "get_data_hex") else " ".join(
+            f"{byte:02X}" for byte in bytes(getattr(can_message, "data", b""))
+        )
+        length = getattr(can_message, "length", len(bytes(getattr(can_message, "data", b""))))
+        received_at = getattr(can_message, "receive_time", None)
+        if not isinstance(received_at, datetime):
+            received_at = datetime.fromtimestamp(timestamp)
+
+        stats = self.can_id_stats.get(key)
+        if stats is None:
+            stats = {
+                "can_id": can_id,
+                "channel": channel,
+                "count": 0,
+                "first_timestamp": timestamp,
+                "last_timestamp": timestamp,
+                "last_wall_time": received_at,
+                "length": length,
+                "sample": data_hex,
+            }
+            self.can_id_stats[key] = stats
+
+        stats["count"] += 1
+        stats["last_timestamp"] = timestamp
+        stats["last_wall_time"] = received_at
+        stats["length"] = length
+        stats["sample"] = data_hex
+        self._stats_table_dirty = True
 
     def _remember_discovered_id(self, can_message: Any, channel: int) -> None:
         try:
@@ -1118,17 +1284,54 @@ class CanMonitorApp:
                 self.messages_tree.insert("", tk.END, values=row)
             self._message_table_dirty = False
 
+        if self._stats_table_dirty:
+            self._refresh_stats_table()
+            self._stats_table_dirty = False
+
         if not self._closing:
             self.root.after(250, self._refresh_message_table)
+
+    def _refresh_stats_table(self) -> None:
+        for item in self.stats_tree.get_children():
+            self.stats_tree.delete(item)
+
+        rows = []
+        for stats in self.can_id_stats.values():
+            count = int(stats["count"])
+            duration = max(float(stats["last_timestamp"]) - float(stats["first_timestamp"]), 1e-9)
+            hz = count / duration if count > 1 else 0.0
+            last_wall_time = stats["last_wall_time"]
+            if isinstance(last_wall_time, datetime):
+                last_text = last_wall_time.strftime("%H:%M:%S.%f")[:-3]
+            else:
+                last_text = ""
+            rows.append(
+                (
+                    count,
+                    (
+                        stats["can_id"],
+                        stats["channel"],
+                        count,
+                        f"{hz:.2f}",
+                        last_text,
+                        stats["length"],
+                        stats["sample"],
+                    ),
+                )
+            )
+
+        for _count, values in sorted(rows, key=lambda item: item[0], reverse=True):
+            self.stats_tree.insert("", tk.END, values=values)
 
     def _redraw_charts(self) -> None:
         if self._closing:
             return
 
         history_seconds = max(10, int(self.history_var.get() or 600))
-        now = time.time()
+        now = self.graph_pause_time if self.graph_paused and self.graph_pause_time is not None else time.time()
         for chart in self.charts.values():
-            chart.draw(now, history_seconds)
+            chart.draw(now, history_seconds, self.time_markers)
+        self._update_graph_state()
         if not self._closing:
             self.root.after(120, self._redraw_charts)
 
@@ -1136,9 +1339,13 @@ class CanMonitorApp:
         self.session_messages = 0
         self.parsed_points = 0
         self.recent_rows.clear()
+        self.can_id_stats.clear()
+        self.time_markers.clear()
         self._message_table_dirty = True
+        self._stats_table_dirty = True
         for chart in self.charts.values():
             chart.clear()
+        self._update_graph_state()
         self._update_count_label()
 
     def _update_count_label(self) -> None:

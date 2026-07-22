@@ -186,6 +186,11 @@ class ProjectTemplate:
         with template_path.open("r", encoding="utf-8") as file:
             payload = json.load(file)
 
+        if isinstance(payload, dict) and "template_key" in payload:
+            from template_registry import project_template_from_definition
+
+            return project_template_from_definition(payload)
+
         if isinstance(payload, dict) and "signals" in payload:
             signals_payload = payload.get("signals") or []
             signals = [

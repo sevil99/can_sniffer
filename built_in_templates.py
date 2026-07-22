@@ -1,85 +1,52 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from template_registry import (
+    TemplateInfo as BuiltInTemplateInfo,
+    code_match_bytes,
+    get_mid_cylinders,
+    get_mid_metrics,
+    get_pid_ids,
+    list_template_infos,
+    load_project_template,
+    load_template_definition,
+)
 
-from can_signal import ProjectTemplate, SignalDefinition
 
+_MID_DEFINITION = load_template_definition("mid")
+_GAS_REGULATOR_DEFINITION = load_template_definition("gas_regulator")
 
-MID_CHANNEL_DEFAULT = 0
-MID_BAUD_RATE_DEFAULT = 500000
-MID_HISTORY_SECONDS_DEFAULT = 600
+MID_CHANNEL_DEFAULT = int(_MID_DEFINITION.get("project", {}).get("channel", 0))
+MID_BAUD_RATE_DEFAULT = int(_MID_DEFINITION.get("project", {}).get("baud_rate", 500000))
+MID_HISTORY_SECONDS_DEFAULT = int(_MID_DEFINITION.get("project", {}).get("history_seconds", 600))
 
-KSI_GENERAL_BASE = 0x0100
-
+MID_CYLINDERS = get_mid_cylinders(_MID_DEFINITION)
+MID_METRICS = get_mid_metrics(_MID_DEFINITION)
 MID_MESSAGE_CODES = {
-    "knock": 0x0003,
-    "offset": 0x0002,
-    "sync_errors": 0x0001,
+    str(metric["key"]): int(str(metric["code"]), 16)
+    for metric in MID_METRICS
 }
-
 MID_METRIC_LABELS = {
-    "knock": "Детонация",
-    "offset": "Смещение",
-    "sync_errors": "Счетчик ошибок",
+    str(metric["key"]): str(metric["label"])
+    for metric in MID_METRICS
 }
-
 MID_METRIC_TYPES = {
-    "knock": "float32",
-    "offset": "float32",
-    "sync_errors": "uint32",
+    str(metric["key"]): str(metric["type"])
+    for metric in MID_METRICS
 }
 
-MID_CYLINDERS = tuple(
-    [(f"A{index}", 0x000E + index) for index in range(1, 13)]
-    + [(f"B{index}", 0x001A + index) for index in range(1, 13)]
+GAS_REGULATOR_DEVICE_ID_DEFAULT = int(str(_GAS_REGULATOR_DEFINITION.get("device_id", "0x001")), 16)
+GAS_REGULATOR_BAUD_RATE_DEFAULT = int(_GAS_REGULATOR_DEFINITION.get("project", {}).get("baud_rate", 500000))
+GAS_REGULATOR_HISTORY_SECONDS_DEFAULT = int(
+    _GAS_REGULATOR_DEFINITION.get("project", {}).get("history_seconds", 600)
 )
 
-GAS_REGULATOR_DEVICE_ID_DEFAULT = 0x001
-GAS_REGULATOR_BAUD_RATE_DEFAULT = 500000
-GAS_REGULATOR_HISTORY_SECONDS_DEFAULT = 600
-
-PID_IDS = {
-    0x27: "PV",
-    0x28: "SP",
-    0x29: "CV",
-    0x30: "CV_P",
-    0x31: "CV_I",
-    0x32: "CV_D",
-    0x33: "Kp",
-    0x34: "Ki",
-    0x35: "Kd",
-    0x36: "PD",
-    0x37: "PD_DZ",
-}
-
-
-@dataclass(frozen=True)
-class BuiltInTemplateInfo:
-    key: str
-    title: str
-    description: str
-
-
-BUILT_IN_TEMPLATES = (
-    BuiltInTemplateInfo(
-        key="mid",
-        title="МИД",
-        description="Модуль измерения детонации: детонация, смещение и счетчик ошибок по цилиндрам.",
-    ),
-    BuiltInTemplateInfo(
-        key="gas_regulator",
-        title="Регулятор газа",
-        description="PID-параметры регулятора газа: PV, SP, CV, составляющие PID и коэффициенты.",
-    ),
-)
-
-
-def code_match_bytes(code: int) -> str:
-    return code.to_bytes(2, byteorder="little", signed=False).hex().upper()
+PID_IDS = get_pid_ids(_GAS_REGULATOR_DEFINITION)
+BUILT_IN_TEMPLATES = list_template_infos()
 
 
 def cylinder_general_id(base_id: int) -> str:
-    return f"0x{base_id + KSI_GENERAL_BASE:03X}"
+    general_base = int(str(_MID_DEFINITION.get("ksi_general_base", "0x100")), 16)
+    return f"0x{base_id + general_base:03X}"
 
 
 def build_mid_template(
@@ -87,39 +54,13 @@ def build_mid_template(
     channel: int = MID_CHANNEL_DEFAULT,
     baud_rate: int = MID_BAUD_RATE_DEFAULT,
     history_seconds: int = MID_HISTORY_SECONDS_DEFAULT,
-) -> ProjectTemplate:
-    signals: list[SignalDefinition] = []
-
-    for cylinder, base_id in MID_CYLINDERS:
-        metrics = selected.get(cylinder, set())
-        for metric_key in ("knock", "offset", "sync_errors"):
-            if metric_key not in metrics:
-                continue
-
-            signals.append(
-                SignalDefinition.from_mapping(
-                    {
-                        "message_id": cylinder_general_id(base_id),
-                        "name": f"{cylinder} {MID_METRIC_LABELS[metric_key]}",
-                        "channel": channel,
-                        "type": MID_METRIC_TYPES[metric_key],
-                        "byte_order": "little_endian",
-                        "start_byte": 4,
-                        "length": 4,
-                        "scale": 1.0,
-                        "offset": 0.0,
-                        "match_offset": 2,
-                        "match_bytes": code_match_bytes(MID_MESSAGE_CODES[metric_key]),
-                    }
-                )
-            )
-
-    return ProjectTemplate(
-        name="МИД",
+):
+    return load_project_template(
+        "mid",
+        selected=selected,
         channel=channel,
         baud_rate=baud_rate,
         history_seconds=history_seconds,
-        signals=signals,
     )
 
 
@@ -133,35 +74,12 @@ def build_gas_regulator_template(
     channel: int = MID_CHANNEL_DEFAULT,
     baud_rate: int = GAS_REGULATOR_BAUD_RATE_DEFAULT,
     history_seconds: int = GAS_REGULATOR_HISTORY_SECONDS_DEFAULT,
-) -> ProjectTemplate:
-    signals: list[SignalDefinition] = []
-
-    for pid_id, name in PID_IDS.items():
-        if pid_id not in selected_pid_ids:
-            continue
-
-        signals.append(
-            SignalDefinition.from_mapping(
-                {
-                    "message_id": f"0x{device_id:03X}",
-                    "name": name,
-                    "channel": channel,
-                    "type": "float32",
-                    "byte_order": "little_endian",
-                    "start_byte": 4,
-                    "length": 4,
-                    "scale": 1.0,
-                    "offset": 0.0,
-                    "match_offset": 2,
-                    "match_bytes": code_match_bytes(pid_id),
-                }
-            )
-        )
-
-    return ProjectTemplate(
-        name="Регулятор газа",
+):
+    return load_project_template(
+        "gas_regulator",
+        selected=selected_pid_ids,
         channel=channel,
         baud_rate=baud_rate,
         history_seconds=history_seconds,
-        signals=signals,
+        device_id=device_id,
     )

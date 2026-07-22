@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "template_key": "mid",
+  "order": 10,
+  "title": "МИД",
+  "description": "Модуль измерения детонации: детонация, смещение и счетчик ошибок по цилиндрам.",
+  "project": {
+    "name": "МИД",
+    "channel": 0,
+    "baud_rate": 500000,
+    "history_seconds": 600
+  },
+  "ksi_general_base": "0x100",
+  "cylinder_groups": [
+    {"prefix": "A", "start": 1, "end": 12, "base_id_start": "0x00F"},
+    {"prefix": "B", "start": 1, "end": 12, "base_id_start": "0x01B"}
+  ],
+  "signal_defaults": {
+    "byte_order": "little_endian",
+    "start_byte": 4,
+    "length": 4,
+    "scale": 1.0,
+    "offset": 0.0,
+    "match_offset": 2
+  },
+  "metrics": [
+    {"key": "knock", "label": "Детонация", "code": "0x0003", "type": "float32"},
+    {"key": "offset", "label": "Смещение", "code": "0x0002", "type": "float32"},
+    {"key": "sync_errors", "label": "Счетчик ошибок", "code": "0x0001", "type": "uint32"}
+  ]
+}

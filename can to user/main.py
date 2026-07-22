@@ -443,11 +443,22 @@ def parse_signal_filter(value: str | None) -> set[str] | None:
     return selected
 
 
+def signal_names_in_template_order(template: ProjectTemplate) -> list[str]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for signal in template.signals:
+        if signal.name in seen:
+            continue
+        names.append(signal.name)
+        seen.add(signal.name)
+    return names
+
+
 def decode_dataframe(
     df: pd.DataFrame,
     template: ProjectTemplate,
     progress: ProgressCallback | None = None,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+) -> pd.DataFrame:
     columns = discover_columns(df)
     if not columns.message_id and not columns.data and not any(columns.byte_columns):
         raise ValueError(f"Не найдены колонки с CAN ID/данными. Колонки файла: {list(df.columns)}")
@@ -496,15 +507,20 @@ def decode_dataframe(
 
     report_progress(progress, f"Формирую таблицы Excel: найдено значений {len(decoded)}", 0.95)
     decoded = add_time_seconds(decoded)
+    signal_order = signal_names_in_template_order(template)
     wide = (
         decoded.pivot_table(index="TimeSec", columns="Signal", values="Value", aggfunc="last")
         .sort_index()
         .ffill()
         .reset_index()
     )
+    ordered_columns = [name for name in signal_order if name in wide.columns]
+    extra_columns = [name for name in wide.columns if name != "TimeSec" and name not in ordered_columns]
+    wide = wide.reindex(columns=["TimeSec", *ordered_columns, *extra_columns])
     wide.columns.name = None
+
     report_progress(progress, "Расшифровка завершена", 1.0)
-    return wide, decoded.sort_values(["TimeSec", "Signal"]).reset_index(drop=True)
+    return wide
 
 
 def add_time_seconds(decoded: pd.DataFrame) -> pd.DataFrame:
@@ -538,12 +554,11 @@ def convert_files_to_excel(
     template = ProjectTemplate.load(template_path)
     template = filter_template_signals(template, selected_signals)
     source = read_input_files(input_paths, progress=progress)
-    wide, decoded = decode_dataframe(source, template, progress=progress)
+    wide = decode_dataframe(source, template, progress=progress)
 
     report_progress(progress, f"Записываю Excel: {output_path}", None)
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         wide.to_excel(writer, sheet_name="data", index=False)
-        decoded.to_excel(writer, sheet_name="decoded_long", index=False)
     report_progress(progress, "Excel сохранен", 1.0)
 
 

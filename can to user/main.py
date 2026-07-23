@@ -8,7 +8,7 @@ import re
 import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-from typing import Any, Callable
+from typing import Any, Callable, TypeAlias
 
 
 def import_pandas():
@@ -53,6 +53,8 @@ from template_registry import get_mid_cylinders, get_mid_metrics, list_template_
 
 
 ProgressCallback = Callable[[str, float | None], None]
+PandasDataFrame: TypeAlias = Any
+PandasSeries: TypeAlias = Any
 
 
 TIME_MODE_RELATIVE = "relative"
@@ -158,7 +160,7 @@ def normalize_column_name(value: Any) -> str:
     return re.sub(r"[^0-9a-zа-я]+", "", str(value).strip().lower())
 
 
-def find_column(df: pd.DataFrame, candidates: tuple[str, ...]) -> str | None:
+def find_column(df: PandasDataFrame, candidates: tuple[str, ...]) -> str | None:
     normalized = {normalize_column_name(column): column for column in df.columns}
     for candidate in candidates:
         column = normalized.get(normalize_column_name(candidate))
@@ -167,12 +169,12 @@ def find_column(df: pd.DataFrame, candidates: tuple[str, ...]) -> str | None:
     return None
 
 
-def find_byte_columns(df: pd.DataFrame) -> tuple[str | None, ...]:
+def find_byte_columns(df: PandasDataFrame) -> tuple[str | None, ...]:
     normalized = {normalize_column_name(column): column for column in df.columns}
     return tuple(normalized.get(normalize_column_name(f"Byte_{index}")) for index in range(8))
 
 
-def discover_columns(df: pd.DataFrame) -> TableColumns:
+def discover_columns(df: PandasDataFrame) -> TableColumns:
     return TableColumns(
         message_id=find_column(df, ID_COL_CANDIDATES),
         data=find_column(df, DATA_COL_CANDIDATES),
@@ -183,8 +185,8 @@ def discover_columns(df: pd.DataFrame) -> TableColumns:
     )
 
 
-def read_input_files(paths: list[str | Path], progress: ProgressCallback | None = None) -> pd.DataFrame:
-    frames: list[pd.DataFrame] = []
+def read_input_files(paths: list[str | Path], progress: ProgressCallback | None = None) -> PandasDataFrame:
+    frames: list[PandasDataFrame] = []
     total_files = len(paths)
     for file_index, raw_path in enumerate(paths, start=1):
         path = Path(raw_path)
@@ -211,7 +213,7 @@ def read_input_files(paths: list[str | Path], progress: ProgressCallback | None 
     return result
 
 
-def read_csv_file(path: Path) -> pd.DataFrame:
+def read_csv_file(path: Path) -> PandasDataFrame:
     last_error: Exception | None = None
     for encoding in ("utf-8-sig", "utf-8", "cp1251"):
         try:
@@ -332,7 +334,7 @@ def parse_raw_log_line(value: Any) -> tuple[int, list[int]] | None:
     return message_id, data
 
 
-def parse_byte_columns(row: pd.Series, columns: tuple[str | None, ...]) -> list[int]:
+def parse_byte_columns(row: PandasSeries, columns: tuple[str | None, ...]) -> list[int]:
     result: list[int] = []
     for column in columns:
         if column is None or is_empty(row.get(column)):
@@ -345,7 +347,7 @@ def parse_byte_columns(row: pd.Series, columns: tuple[str | None, ...]) -> list[
 
 
 def row_to_messages(
-    row: pd.Series,
+    row: PandasSeries,
     columns: TableColumns,
     template: ProjectTemplate,
     channel: int,
@@ -525,11 +527,11 @@ def mid_signal_cells(template_path: str | Path, template: ProjectTemplate) -> tu
 
 
 def decode_dataframe(
-    df: pd.DataFrame,
+    df: PandasDataFrame,
     template: ProjectTemplate,
     time_mode: str = TIME_MODE_RELATIVE,
     progress: ProgressCallback | None = None,
-) -> pd.DataFrame:
+) -> PandasDataFrame:
     time_mode = parse_time_mode(time_mode)
     columns = discover_columns(df)
     if not columns.message_id and not columns.data and not any(columns.byte_columns):
@@ -595,7 +597,7 @@ def decode_dataframe(
     return wide
 
 
-def add_time_column(decoded: pd.DataFrame, time_mode: str) -> tuple[pd.DataFrame, str]:
+def add_time_column(decoded: PandasDataFrame, time_mode: str) -> tuple[PandasDataFrame, str]:
     time_mode = parse_time_mode(time_mode)
     if time_mode == TIME_MODE_ABSOLUTE:
         with_absolute_time = add_absolute_time_column(decoded)
@@ -604,7 +606,7 @@ def add_time_column(decoded: pd.DataFrame, time_mode: str) -> tuple[pd.DataFrame
     return add_relative_time_column(decoded), "TimeSec"
 
 
-def add_absolute_time_column(decoded: pd.DataFrame) -> pd.DataFrame | None:
+def add_absolute_time_column(decoded: PandasDataFrame) -> PandasDataFrame | None:
     decoded = decoded.copy()
     timestamps = pd.to_datetime(decoded["Timestamp"], errors="coerce")
     if not timestamps.notna().any():
@@ -617,7 +619,7 @@ def add_absolute_time_column(decoded: pd.DataFrame) -> pd.DataFrame | None:
     return decoded
 
 
-def add_relative_time_column(decoded: pd.DataFrame) -> pd.DataFrame:
+def add_relative_time_column(decoded: PandasDataFrame) -> PandasDataFrame:
     decoded = decoded.copy()
     timestamps = pd.to_datetime(decoded["Timestamp"], errors="coerce")
     if timestamps.notna().any():

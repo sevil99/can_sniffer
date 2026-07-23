@@ -1332,7 +1332,41 @@ class CanMonitorApp:
         label = self.can_id_catalog.describe(can_id, channel)
         display_value = f"{value} - {label}" if label else value
         self.discovered_id_display_values[display_value] = value
-        self.ids_list.insert(tk.END, display_value)
+        self._refresh_discovered_ids_list()
+
+    def _refresh_discovered_ids_list(self) -> None:
+        selected_display = None
+        selection = self.ids_list.curselection()
+        if selection:
+            selected_display = self.ids_list.get(selection[0])
+
+        ordered_values = sorted(
+            self.discovered_id_display_values.items(),
+            key=lambda item: self._discovered_id_sort_key(item[1], item[0]),
+        )
+
+        self.ids_list.delete(0, tk.END)
+        for index, (display_value, _raw_value) in enumerate(ordered_values):
+            self.ids_list.insert(tk.END, display_value)
+            if display_value == selected_display:
+                self.ids_list.selection_set(index)
+
+    @staticmethod
+    def _discovered_id_sort_key(raw_value: str, display_value: str) -> tuple[int, int, str]:
+        message_id, channel = raw_value, -1
+        if "_CH" in raw_value:
+            message_id, channel_text = raw_value.split("_CH", 1)
+            try:
+                channel = int(channel_text)
+            except ValueError:
+                channel = -1
+
+        try:
+            numeric_id = parse_can_id(message_id)
+        except Exception:
+            numeric_id = 0xFFFFFFFF
+
+        return numeric_id, channel, display_value
 
     def _remember_message_row(self, can_message: Any, channel: int, parsed: dict[str, float]) -> None:
         received_at = getattr(can_message, "receive_time", None)

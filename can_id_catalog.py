@@ -59,9 +59,18 @@ def _load_template_labels(catalog: CanIdCatalog) -> None:
         except Exception:
             continue
 
-        label = template.name or info.title
         for signal in template.signals:
+            label = _template_signal_label(info.key, template.name or info.title, signal.name)
             catalog.add(signal.message_id, label, signal.channel)
+
+
+def _template_signal_label(template_key: str, template_name: str, signal_name: str) -> str:
+    if template_key == "mid":
+        cylinder = signal_name.split(maxsplit=1)[0].strip()
+        if cylinder:
+            return f"{template_name} {cylinder}"
+
+    return template_name
 
 
 def _load_json_catalog(catalog: CanIdCatalog, path: Path) -> None:

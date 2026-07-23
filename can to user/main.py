@@ -612,7 +612,7 @@ def add_absolute_time_column(decoded: PandasDataFrame) -> PandasDataFrame | None
     if not timestamps.notna().any():
         return None
 
-    decoded["Time"] = timestamps.dt.strftime("%H:%M:%S.%f").str[:-3]
+    decoded["Time"] = timestamps.dt.round("ms")
     decoded = decoded.dropna(subset=["Time"])
     if decoded.empty:
         return None
@@ -666,6 +666,10 @@ def convert_files_to_excel(
             for column_cells in worksheet.iter_cols(min_col=1, max_col=1, min_row=2):
                 for cell in column_cells:
                     cell.number_format = "0.000"
+        elif len(wide.columns) > 0 and wide.columns[0] == "Time":
+            for column_cells in worksheet.iter_cols(min_col=1, max_col=1, min_row=2):
+                for cell in column_cells:
+                    cell.number_format = "hh:mm:ss.000"
     report_progress(progress, "Excel сохранен", 1.0)
 
 

@@ -150,6 +150,9 @@ class SignalChart(ttk.Frame):
         self.signal = signal
         self.color = color
         self.points: deque[tuple[float, float]] = deque(maxlen=50000)
+        self.rendered_points: list[tuple[float, float, float, float]] = []
+        self.plot_bounds: tuple[int, int, int, int] | None = None
+        self.hover_position: tuple[int, int] | None = None
 
         self.title_var = tk.StringVar(value=signal.label)
         self.value_var = tk.StringVar(value="нет данных")
@@ -162,6 +165,8 @@ class SignalChart(ttk.Frame):
         self.canvas = tk.Canvas(self, height=170, background="#ffffff", highlightthickness=1, highlightbackground="#d6dbe1")
         self.canvas.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
         self.canvas.bind("<Configure>", lambda _event: self.draw(time.time(), 600, []))
+        self.canvas.bind("<Motion>", self._on_cursor_motion)
+        self.canvas.bind("<Leave>", self._on_cursor_leave)
 
     def append(self, timestamp: float, value: float) -> None:
         self.points.append((timestamp, value))
@@ -169,6 +174,9 @@ class SignalChart(ttk.Frame):
 
     def clear(self) -> None:
         self.points.clear()
+        self.rendered_points.clear()
+        self.plot_bounds = None
+        self.hover_position = None
         self.value_var.set("нет данных")
         self.canvas.delete("all")
 
@@ -184,6 +192,8 @@ class SignalChart(ttk.Frame):
         bottom = height - 28
         start_time = now - history_seconds
         span = max(history_seconds, 1)
+        self.rendered_points = []
+        self.plot_bounds = (left, right, top, bottom)
 
         canvas.create_rectangle(0, 0, width, height, fill="#ffffff", outline="")
         for index in range(5):
@@ -225,7 +235,10 @@ class SignalChart(ttk.Frame):
         for timestamp, value in recent:
             x = left + (timestamp - start_time) / span * (right - left)
             y = bottom - (value - min_value) / value_span * (bottom - top)
-            coords.extend((max(left, min(right, x)), max(top, min(bottom, y))))
+            bounded_x = max(left, min(right, x))
+            bounded_y = max(top, min(bottom, y))
+            coords.extend((bounded_x, bounded_y))
+            self.rendered_points.append((timestamp, value, bounded_x, bounded_y))
 
         canvas.create_line(left, bottom, right, bottom, fill="#9ca3af")
         canvas.create_line(left, top, left, bottom, fill="#9ca3af")
@@ -240,6 +253,69 @@ class SignalChart(ttk.Frame):
         else:
             x, y = coords
             canvas.create_oval(x - 2, y - 2, x + 2, y + 2, fill=self.color, outline=self.color)
+
+        self._draw_cursor()
+
+    def _on_cursor_motion(self, event: tk.Event) -> None:
+        self.hover_position = (int(event.x), int(event.y))
+        self._draw_cursor()
+
+    def _on_cursor_leave(self, _event: tk.Event) -> None:
+        self.hover_position = None
+        self.canvas.delete("cursor")
+
+    def _nearest_cursor_point(self) -> tuple[float, float, float, float] | None:
+        if self.hover_position is None or self.plot_bounds is None or not self.rendered_points:
+            return None
+
+        hover_x, hover_y = self.hover_position
+        left, right, top, bottom = self.plot_bounds
+        if hover_x < left or hover_x > right or hover_y < top or hover_y > bottom:
+            return None
+
+        return min(self.rendered_points, key=lambda point: abs(point[2] - hover_x))
+
+    def _draw_cursor(self) -> None:
+        canvas = self.canvas
+        canvas.delete("cursor")
+
+        nearest = self._nearest_cursor_point()
+        if nearest is None or self.plot_bounds is None:
+            return
+
+        timestamp, value, x, y = nearest
+        left, right, top, bottom = self.plot_bounds
+        time_text = datetime.fromtimestamp(timestamp).strftime("%H:%M:%S.%f")[:-3]
+        label = f"{time_text}\n{value:.6g}"
+
+        canvas.create_line(x, top, x, bottom, fill="#334155", dash=(3, 2), width=1, tags="cursor")
+        canvas.create_line(left, y, right, y, fill="#cbd5e1", dash=(2, 2), width=1, tags="cursor")
+        canvas.create_oval(x - 4, y - 4, x + 4, y + 4, fill="#ffffff", outline=self.color, width=2, tags="cursor")
+
+        anchor = "nw" if x < (left + right) / 2 else "ne"
+        text_x = x + 8 if anchor == "nw" else x - 8
+        text_id = canvas.create_text(
+            text_x,
+            top + 6,
+            anchor=anchor,
+            text=label,
+            fill="#0f172a",
+            font=("Segoe UI", 9),
+            tags="cursor",
+        )
+        bbox = canvas.bbox(text_id)
+        if bbox is not None:
+            x1, y1, x2, y2 = bbox
+            background_id = canvas.create_rectangle(
+                x1 - 6,
+                y1 - 4,
+                x2 + 6,
+                y2 + 4,
+                fill="#f8fafc",
+                outline="#94a3b8",
+                tags="cursor",
+            )
+            canvas.tag_lower(background_id, text_id)
 
     def _draw_markers(
         self,

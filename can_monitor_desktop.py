@@ -26,6 +26,7 @@ from built_in_templates import (
     default_mid_selection,
 )
 from can_receiver import create_receiver
+from can_id_catalog import load_can_id_catalog
 from can_signal import (
     ProjectTemplate,
     SUPPORTED_BYTE_ORDERS,
@@ -353,6 +354,8 @@ class CanMonitorApp:
         self.signal_by_key: dict[str, SignalDefinition] = {}
         self.charts: dict[str, SignalChart] = {}
         self.discovered_ids: set[str] = set()
+        self.discovered_id_display_values: dict[str, str] = {}
+        self.can_id_catalog = load_can_id_catalog()
         self.recent_rows: deque[tuple[Any, ...]] = deque(maxlen=200)
 
         self.session_messages = 0
@@ -1079,6 +1082,7 @@ class CanMonitorApp:
             return
 
         value = self.ids_list.get(selection[0])
+        value = self.discovered_id_display_values.get(value, value)
         if "_CH" in value:
             message_id, channel = value.split("_CH", 1)
             self.show_signal_dialog(prefill_id=message_id, prefill_channel=channel)
@@ -1317,14 +1321,18 @@ class CanMonitorApp:
 
     def _remember_discovered_id(self, can_message: Any, channel: int) -> None:
         try:
-            value = f"{get_message_id_string(can_message)}_CH{channel}"
+            can_id = get_message_id_string(can_message)
+            value = f"{can_id}_CH{channel}"
         except Exception:
             return
 
         if value in self.discovered_ids:
             return
         self.discovered_ids.add(value)
-        self.ids_list.insert(tk.END, value)
+        label = self.can_id_catalog.describe(can_id, channel)
+        display_value = f"{value} - {label}" if label else value
+        self.discovered_id_display_values[display_value] = value
+        self.ids_list.insert(tk.END, display_value)
 
     def _remember_message_row(self, can_message: Any, channel: int, parsed: dict[str, float]) -> None:
         received_at = getattr(can_message, "receive_time", None)
@@ -1416,6 +1424,9 @@ class CanMonitorApp:
         self.parsed_points = 0
         self.recent_rows.clear()
         self.can_id_stats.clear()
+        self.discovered_ids.clear()
+        self.discovered_id_display_values.clear()
+        self.ids_list.delete(0, tk.END)
         self.time_markers.clear()
         self._message_table_dirty = True
         self._stats_table_dirty = True

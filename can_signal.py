@@ -90,6 +90,24 @@ def _clean_hex_bytes(value: Any, field_name: str) -> str:
     return text
 
 
+def _as_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    if isinstance(value, (list, tuple, set)):
+        return list(value)
+    return [value]
+
+
+def _normalize_can_id_list(value: Any) -> tuple[str, ...]:
+    return tuple(normalize_can_id(item) for item in _as_list(value))
+
+
+def _int_list(value: Any) -> tuple[int, ...]:
+    return tuple(int(item) for item in _as_list(value))
+
+
 @dataclass
 class SignalDefinition:
     message_id: str
@@ -104,6 +122,8 @@ class SignalDefinition:
     first_bytes: str = ""
     match_offset: int = 0
     match_bytes: str = ""
+    message_id_aliases: tuple[str, ...] = ()
+    match_offset_aliases: tuple[int, ...] = ()
     color: str = ""
 
     @classmethod
@@ -137,6 +157,8 @@ class SignalDefinition:
             first_bytes=_clean_hex_bytes(source.get("first_bytes", ""), "first_bytes"),
             match_offset=int(source.get("match_offset", 0)),
             match_bytes=_clean_hex_bytes(source.get("match_bytes", ""), "match_bytes"),
+            message_id_aliases=_normalize_can_id_list(source.get("message_id_aliases", source.get("id_aliases"))),
+            match_offset_aliases=_int_list(source.get("match_offset_aliases")),
             color=str(source.get("color", "")),
         )
 
@@ -147,11 +169,13 @@ class SignalDefinition:
 
     @property
     def label(self) -> str:
-        label = f"CH{self.channel}: {normalize_can_id(self.message_id)} {self.name}"
+        message_ids = list(dict.fromkeys([normalize_can_id(self.message_id), *self.message_id_aliases]))
+        label = f"CH{self.channel}: {'/'.join(message_ids)} {self.name}"
         if self.first_bytes:
             label = f"{label} [{self.first_bytes}]"
         if self.match_bytes:
-            label = f"{label} @B{self.match_offset}:{self.match_bytes}"
+            offsets = list(dict.fromkeys([str(self.match_offset), *(str(offset) for offset in self.match_offset_aliases)]))
+            label = f"{label} @B{'/'.join(offsets)}:{self.match_bytes}"
         return label
 
     def to_mapping(self) -> dict[str, Any]:
@@ -168,6 +192,8 @@ class SignalDefinition:
             "first_bytes": self.first_bytes,
             "match_offset": self.match_offset,
             "match_bytes": self.match_bytes,
+            "message_id_aliases": list(self.message_id_aliases),
+            "match_offset_aliases": list(self.match_offset_aliases),
             "color": self.color,
         }
 
@@ -175,7 +201,7 @@ class SignalDefinition:
 @dataclass
 class ProjectTemplate:
     name: str = "CAN project"
-    channel: int = 1
+    channel: int = 0
     baud_rate: int = 500000
     history_seconds: int = 600
     signals: list[SignalDefinition] = field(default_factory=list)
@@ -200,7 +226,7 @@ class ProjectTemplate:
             ]
             return cls(
                 name=str(payload.get("name", template_path.stem)),
-                channel=int(payload.get("channel", 1)),
+                channel=int(payload.get("channel", 0)),
                 baud_rate=int(payload.get("baud_rate", 500000)),
                 history_seconds=int(payload.get("history_seconds", 600)),
                 signals=signals,
@@ -217,13 +243,18 @@ class ProjectTemplate:
         raise ValueError("Unsupported template format")
 
     def save(self, path: str | Path) -> None:
+        signal_payloads = []
+        for signal in self.signals:
+            signal_payload = signal.to_mapping()
+            signal_payload.pop("channel", None)
+            signal_payloads.append(signal_payload)
+
         payload = {
             "version": 1,
             "name": self.name,
-            "channel": self.channel,
             "baud_rate": self.baud_rate,
             "history_seconds": self.history_seconds,
-            "signals": [signal.to_mapping() for signal in self.signals],
+            "signals": signal_payloads,
         }
         with Path(path).open("w", encoding="utf-8") as file:
             json.dump(payload, file, indent=2, ensure_ascii=False)
@@ -233,7 +264,9 @@ def message_matches_signal(can_message: Any, channel: int, signal: SignalDefinit
     if int(channel) != int(signal.channel):
         return False
 
-    if get_message_id(can_message) != parse_can_id(signal.message_id):
+    message_ids = {parse_can_id(signal.message_id)}
+    message_ids.update(parse_can_id(message_id) for message_id in signal.message_id_aliases)
+    if get_message_id(can_message) not in message_ids:
         return False
 
     if signal.first_bytes:
@@ -244,14 +277,19 @@ def message_matches_signal(can_message: Any, channel: int, signal: SignalDefinit
     if signal.match_bytes:
         data = bytes(getattr(can_message, "data", b""))
         match = bytes.fromhex(signal.match_bytes)
-        start = int(signal.match_offset)
-        end = start + len(match)
-        if start < 0 or end > len(data):
-            return False
-        if data[start:end] != match:
+        offsets = [int(signal.match_offset), *signal.match_offset_aliases]
+        if not any(_match_bytes_at_offset(data, match, offset) for offset in offsets):
             return False
 
     return True
+
+
+def _match_bytes_at_offset(data: bytes, match: bytes, offset: int) -> bool:
+    start = int(offset)
+    end = start + len(match)
+    if start < 0 or end > len(data):
+        return False
+    return data[start:end] == match
 
 
 def parse_signal_value(can_message: Any, signal: SignalDefinition) -> float | None:

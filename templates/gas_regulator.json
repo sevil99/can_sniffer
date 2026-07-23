@@ -6,11 +6,11 @@
   "description": "PID-параметры регулятора газа: PV, SP, CV, составляющие PID и коэффициенты.",
   "project": {
     "name": "Регулятор газа",
-    "channel": 0,
     "baud_rate": 500000,
     "history_seconds": 600
   },
   "device_id": "0x001",
+  "device_id_aliases": ["0x000"],
   "signal_defaults": {
     "type": "float32",
     "byte_order": "little_endian",
@@ -18,7 +18,8 @@
     "length": 4,
     "scale": 1.0,
     "offset": 0.0,
-    "match_offset": 2
+    "match_offset": 2,
+    "match_offset_aliases": [0]
   },
   "pid_signals": [
     {"pid_id": "0x27", "name": "PV"},

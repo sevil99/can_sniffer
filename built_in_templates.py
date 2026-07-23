@@ -15,7 +15,7 @@ from template_registry import (
 _MID_DEFINITION = load_template_definition("mid")
 _GAS_REGULATOR_DEFINITION = load_template_definition("gas_regulator")
 
-MID_CHANNEL_DEFAULT = int(_MID_DEFINITION.get("project", {}).get("channel", 0))
+TEMPLATE_CHANNEL_DEFAULT = 0
 MID_BAUD_RATE_DEFAULT = int(_MID_DEFINITION.get("project", {}).get("baud_rate", 500000))
 MID_HISTORY_SECONDS_DEFAULT = int(_MID_DEFINITION.get("project", {}).get("history_seconds", 600))
 
@@ -51,7 +51,7 @@ def cylinder_general_id(base_id: int) -> str:
 
 def build_mid_template(
     selected: dict[str, set[str]],
-    channel: int = MID_CHANNEL_DEFAULT,
+    channel: int = TEMPLATE_CHANNEL_DEFAULT,
     baud_rate: int = MID_BAUD_RATE_DEFAULT,
     history_seconds: int = MID_HISTORY_SECONDS_DEFAULT,
 ):
@@ -71,7 +71,7 @@ def default_mid_selection() -> dict[str, set[str]]:
 def build_gas_regulator_template(
     selected_pid_ids: set[int],
     device_id: int = GAS_REGULATOR_DEVICE_ID_DEFAULT,
-    channel: int = MID_CHANNEL_DEFAULT,
+    channel: int = TEMPLATE_CHANNEL_DEFAULT,
     baud_rate: int = GAS_REGULATOR_BAUD_RATE_DEFAULT,
     history_seconds: int = GAS_REGULATOR_HISTORY_SECONDS_DEFAULT,
 ):

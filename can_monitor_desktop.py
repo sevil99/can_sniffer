@@ -716,7 +716,9 @@ class CanMonitorApp:
 
     def _apply_template(self, template: ProjectTemplate) -> None:
         self.signals = list(template.signals)
-        self.channel_var.set(str(template.channel))
+        selected_channel = int(self.channel_var.get())
+        for signal in self.signals:
+            signal.channel = selected_channel
         self.baud_var.set(str(template.baud_rate))
         self.history_var.set(template.history_seconds)
         self._rebuild_signal_views()
@@ -742,7 +744,6 @@ class CanMonitorApp:
 
         selection = default_mid_selection()
         variables: dict[tuple[str, str], tk.BooleanVar] = {}
-        channel_var = tk.StringVar(value=self.channel_var.get())
         baud_var = tk.StringVar(value=str(MID_BAUD_RATE_DEFAULT))
         history_var = tk.IntVar(value=MID_HISTORY_SECONDS_DEFAULT)
 
@@ -792,24 +793,18 @@ class CanMonitorApp:
 
         controls = ttk.Frame(root_frame)
         controls.grid(row=3, column=0, sticky="ew", pady=(10, 0))
-        controls.columnconfigure(7, weight=1)
+        controls.columnconfigure(4, weight=1)
 
-        ttk.Label(controls, text="Канал").grid(row=0, column=0, padx=(0, 4))
-        ttk.Combobox(controls, textvariable=channel_var, values=("0", "1"), state="readonly", width=5).grid(
+        ttk.Label(controls, text="Скорость").grid(row=0, column=0, padx=(0, 4))
+        ttk.Combobox(controls, textvariable=baud_var, values=BAUD_RATES, state="readonly", width=10).grid(
             row=0,
             column=1,
             padx=(0, 10),
         )
-        ttk.Label(controls, text="Скорость").grid(row=0, column=2, padx=(0, 4))
-        ttk.Combobox(controls, textvariable=baud_var, values=BAUD_RATES, state="readonly", width=10).grid(
-            row=0,
-            column=3,
-            padx=(0, 10),
-        )
-        ttk.Label(controls, text="История, сек").grid(row=0, column=4, padx=(0, 4))
+        ttk.Label(controls, text="История, сек").grid(row=0, column=2, padx=(0, 4))
         ttk.Spinbox(controls, from_=10, to=3600, increment=10, textvariable=history_var, width=7).grid(
             row=0,
-            column=5,
+            column=3,
         )
 
         buttons = ttk.Frame(root_frame)
@@ -837,7 +832,7 @@ class CanMonitorApp:
 
             template = build_mid_template(
                 selected=selected,
-                channel=int(channel_var.get()),
+                channel=int(self.channel_var.get()),
                 baud_rate=int(baud_var.get()),
                 history_seconds=int(history_var.get()),
             )
@@ -863,7 +858,6 @@ class CanMonitorApp:
 
         variables: dict[int, tk.BooleanVar] = {}
         device_id_var = tk.StringVar(value=f"0x{GAS_REGULATOR_DEVICE_ID_DEFAULT:03X}")
-        channel_var = tk.StringVar(value=self.channel_var.get())
         baud_var = tk.StringVar(value=str(GAS_REGULATOR_BAUD_RATE_DEFAULT))
         history_var = tk.IntVar(value=GAS_REGULATOR_HISTORY_SECONDS_DEFAULT)
 
@@ -885,25 +879,18 @@ class CanMonitorApp:
 
         ttk.Label(params, text="CAN ID устройства").grid(row=0, column=0, sticky="w", padx=(0, 4), pady=3)
         ttk.Entry(params, textvariable=device_id_var, width=12).grid(row=0, column=1, sticky="w", padx=(0, 12), pady=3)
-        ttk.Label(params, text="Канал").grid(row=0, column=2, sticky="w", padx=(0, 4), pady=3)
-        ttk.Combobox(params, textvariable=channel_var, values=("0", "1"), state="readonly", width=5).grid(
+        ttk.Label(params, text="Скорость").grid(row=0, column=2, sticky="w", padx=(0, 4), pady=3)
+        ttk.Combobox(params, textvariable=baud_var, values=BAUD_RATES, state="readonly", width=10).grid(
             row=0,
             column=3,
-            sticky="w",
-            pady=3,
-        )
-        ttk.Label(params, text="Скорость").grid(row=1, column=0, sticky="w", padx=(0, 4), pady=3)
-        ttk.Combobox(params, textvariable=baud_var, values=BAUD_RATES, state="readonly", width=10).grid(
-            row=1,
-            column=1,
             sticky="w",
             padx=(0, 12),
             pady=3,
         )
-        ttk.Label(params, text="История, сек").grid(row=1, column=2, sticky="w", padx=(0, 4), pady=3)
+        ttk.Label(params, text="История, сек").grid(row=1, column=0, sticky="w", padx=(0, 4), pady=3)
         ttk.Spinbox(params, from_=10, to=3600, increment=10, textvariable=history_var, width=7).grid(
             row=1,
-            column=3,
+            column=1,
             sticky="w",
             pady=3,
         )
@@ -949,7 +936,7 @@ class CanMonitorApp:
             template = build_gas_regulator_template(
                 selected_pid_ids=selected_pid_ids,
                 device_id=device_id,
-                channel=int(channel_var.get()),
+                channel=int(self.channel_var.get()),
                 baud_rate=int(baud_var.get()),
                 history_seconds=int(history_var.get()),
             )
@@ -978,7 +965,6 @@ class CanMonitorApp:
         try:
             template = ProjectTemplate(
                 name=Path(path).stem,
-                channel=int(self.channel_var.get()),
                 baud_rate=int(self.baud_var.get()),
                 history_seconds=int(self.history_var.get()),
                 signals=list(self.signals),
@@ -988,7 +974,7 @@ class CanMonitorApp:
         except Exception as error:
             messagebox.showerror("Ошибка сохранения шаблона", str(error))
 
-    def show_signal_dialog(self, prefill_id: str = "", prefill_channel: str | None = None) -> None:
+    def show_signal_dialog(self, prefill_id: str = "") -> None:
         dialog = tk.Toplevel(self.root)
         dialog.title("Сигнал")
         dialog.transient(self.root)
@@ -998,7 +984,6 @@ class CanMonitorApp:
         values = {
             "message_id": tk.StringVar(value=prefill_id),
             "name": tk.StringVar(value="Value"),
-            "channel": tk.StringVar(value=prefill_channel or self.channel_var.get()),
             "type": tk.StringVar(value="float32"),
             "byte_order": tk.StringVar(value="little_endian"),
             "start_byte": tk.StringVar(value="0"),
@@ -1013,7 +998,6 @@ class CanMonitorApp:
         fields = (
             ("CAN ID", "message_id"),
             ("Имя", "name"),
-            ("Канал", "channel"),
             ("Тип", "type"),
             ("Порядок байт", "byte_order"),
             ("Стартовый байт", "start_byte"),
@@ -1034,8 +1018,6 @@ class CanMonitorApp:
                 widget = ttk.Combobox(body, textvariable=values[key], values=SUPPORTED_TYPES, state="readonly", width=24)
             elif key == "byte_order":
                 widget = ttk.Combobox(body, textvariable=values[key], values=SUPPORTED_BYTE_ORDERS, state="readonly", width=24)
-            elif key == "channel":
-                widget = ttk.Combobox(body, textvariable=values[key], values=("0", "1"), state="readonly", width=24)
             else:
                 widget = ttk.Entry(body, textvariable=values[key], width=27)
             widget.grid(row=row, column=1, sticky="ew", pady=3)
@@ -1050,7 +1032,7 @@ class CanMonitorApp:
                     {
                         "message_id": normalize_can_id(values["message_id"].get()),
                         "name": values["name"].get(),
-                        "channel": int(values["channel"].get()),
+                        "channel": int(self.channel_var.get()),
                         "type": values["type"].get(),
                         "byte_order": values["byte_order"].get(),
                         "start_byte": int(values["start_byte"].get()),
@@ -1084,8 +1066,8 @@ class CanMonitorApp:
         value = self.ids_list.get(selection[0])
         value = self.discovered_id_display_values.get(value, value)
         if "_CH" in value:
-            message_id, channel = value.split("_CH", 1)
-            self.show_signal_dialog(prefill_id=message_id, prefill_channel=channel)
+            message_id, _channel = value.split("_CH", 1)
+            self.show_signal_dialog(prefill_id=message_id)
         else:
             self.show_signal_dialog(prefill_id=value)
 

@@ -62,6 +62,8 @@ def _load_template_labels(catalog: CanIdCatalog) -> None:
         for signal in template.signals:
             label = _template_signal_label(info.key, template.name or info.title, signal.name)
             catalog.add(signal.message_id, label, signal.channel)
+            for message_id_alias in signal.message_id_aliases:
+                catalog.add(message_id_alias, label, signal.channel)
 
 
 def _template_signal_label(template_key: str, template_name: str, signal_name: str) -> str:

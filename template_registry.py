@@ -82,7 +82,7 @@ def project_template_from_definition(
     template_key = str(definition.get("template_key") or "")
     project = dict(definition.get("project") or {})
 
-    project_channel = int(project.get("channel", 0) if channel is None else channel)
+    project_channel = int(0 if channel is None else channel)
     project_baud_rate = int(project.get("baud_rate", 500000) if baud_rate is None else baud_rate)
     project_history = int(project.get("history_seconds", 600) if history_seconds is None else history_seconds)
 
@@ -186,7 +186,9 @@ def _build_gas_regulator_signals(
     device_id: int | None,
 ) -> list[SignalDefinition]:
     defaults = dict(definition.get("signal_defaults") or {})
-    message_id = device_id if device_id is not None else parse_can_id(definition.get("device_id", "0x001"))
+    default_message_id = parse_can_id(definition.get("device_id", "0x001"))
+    message_id = device_id if device_id is not None else default_message_id
+    message_id_aliases = definition.get("device_id_aliases", []) if message_id == default_message_id else []
     pid_ids = get_pid_ids(definition)
     selected_pid_ids = set(pid_ids) if selected is None else {int(pid_id) for pid_id in selected}
 
@@ -200,6 +202,7 @@ def _build_gas_regulator_signals(
                 {
                     **defaults,
                     "message_id": f"0x{message_id:03X}",
+                    "message_id_aliases": message_id_aliases,
                     "name": name,
                     "channel": channel,
                     "match_bytes": code_match_bytes(pid_id),

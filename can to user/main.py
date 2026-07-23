@@ -232,9 +232,10 @@ def parse_int_cell(value: Any, assume_hex: bool = False) -> int | None:
         return None
 
     if isinstance(value, int):
-        return value
+        return int(str(value), 16) if assume_hex else value
     if isinstance(value, float) and value.is_integer():
-        return int(value)
+        int_value = int(value)
+        return int(str(int_value), 16) if assume_hex else int_value
 
     text = str(value).strip()
     if not text:
@@ -420,6 +421,12 @@ def signals_for_channel(template: ProjectTemplate, channel: int, cache: dict[int
     return cache[channel]
 
 
+def signal_choice_label(signal: Any, compact: bool = False) -> str:
+    if compact:
+        return signal.name
+    return re.sub(r"^CH\d+:\s*", "", signal.label, flags=re.IGNORECASE)
+
+
 def filter_template_signals(template: ProjectTemplate, selected_names: set[str] | None) -> ProjectTemplate:
     if selected_names is None:
         return template
@@ -428,7 +435,7 @@ def filter_template_signals(template: ProjectTemplate, selected_names: set[str] 
     signals = [
         signal
         for signal in template.signals
-        if signal.name in selected or signal.key in selected or signal.label in selected
+        if signal.name in selected or signal.key in selected or signal.label in selected or signal_choice_label(signal) in selected
     ]
     if not signals:
         raise ValueError("Не выбран ни один сигнал для расшифровки.")
@@ -488,6 +495,18 @@ def is_mid_template(template_path: str | Path, template: ProjectTemplate) -> boo
     path_key = Path(template_path).stem.lower()
     name_key = template.name.strip().lower()
     return template_key == "mid" or path_key == "mid" or name_key == "мид"
+
+
+def is_gas_regulator_template(template_path: str | Path, template: ProjectTemplate) -> bool:
+    try:
+        definition = load_template_definition(template_path)
+    except Exception:
+        definition = {}
+
+    template_key = str(definition.get("template_key") or "").strip().lower()
+    path_key = Path(template_path).stem.lower()
+    name_key = template.name.strip().lower()
+    return template_key == "gas_regulator" or path_key == "gas_regulator" or name_key == "регулятор газа"
 
 
 def time_mode_label(time_mode: str) -> str:
@@ -804,10 +823,10 @@ def choose_template(root: tk.Tk) -> Path | None:
 def choose_signals(root: tk.Tk, template: ProjectTemplate, template_path: str | Path) -> set[str] | None:
     if is_mid_template(template_path, template):
         return choose_mid_signals(root, template, template_path)
-    return choose_generic_signals(root, template)
+    return choose_generic_signals(root, template, compact_labels=is_gas_regulator_template(template_path, template))
 
 
-def choose_generic_signals(root: tk.Tk, template: ProjectTemplate) -> set[str] | None:
+def choose_generic_signals(root: tk.Tk, template: ProjectTemplate, compact_labels: bool = False) -> set[str] | None:
     result: dict[str, set[str] | None] = {"signals": None}
 
     dialog = tk.Toplevel(root)
@@ -847,7 +866,7 @@ def choose_generic_signals(root: tk.Tk, template: ProjectTemplate) -> set[str] |
     for row, signal in enumerate(template.signals):
         var = tk.BooleanVar(value=False)
         variables[signal.name] = var
-        ttk.Checkbutton(list_frame, text=signal.label, variable=var, command=lambda: update_count()).grid(
+        ttk.Checkbutton(list_frame, text=signal_choice_label(signal, compact=compact_labels), variable=var, command=lambda: update_count()).grid(
             row=row,
             column=0,
             sticky="w",

@@ -1,14 +1,12 @@
 {
   "version": 1,
   "name": "Example CAN project",
-  "channel": 1,
   "baud_rate": 500000,
   "history_seconds": 600,
   "signals": [
     {
       "message_id": "0x181",
       "name": "Value",
-      "channel": 1,
       "type": "float32",
       "byte_order": "little_endian",
       "start_byte": 0,
@@ -17,7 +15,9 @@
       "offset": 0.0,
       "first_bytes": "",
       "match_offset": 0,
+      "match_offset_aliases": [],
       "match_bytes": "",
+      "message_id_aliases": [],
       "color": ""
     }
   ]

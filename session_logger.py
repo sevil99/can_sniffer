@@ -8,6 +8,10 @@ import threading
 from typing import Any
 
 
+EXCEL_MAX_ROWS = 1_048_576
+CSV_DATA_ROWS_PER_FILE = EXCEL_MAX_ROWS - 1
+
+
 class CsvSessionLogger:
     HEADER = [
         "Record_Number",
@@ -32,12 +36,14 @@ class CsvSessionLogger:
         "Parsed_Signals",
     ]
 
-    def __init__(self, root_dir: str | Path):
+    def __init__(self, root_dir: str | Path, max_rows_per_file: int = CSV_DATA_ROWS_PER_FILE):
         self.root_dir = Path(root_dir)
         self.root_dir.mkdir(parents=True, exist_ok=True)
+        self.max_rows_per_file = max(1, int(max_rows_per_file))
 
         self.session_dir: Path | None = None
         self.csv_path: Path | None = None
+        self.csv_file_index = 1
         self.started_at: datetime | None = None
         self.dropped_rows = 0
 
@@ -67,7 +73,8 @@ class CsvSessionLogger:
 
         with self._state_lock:
             self.session_dir = session_dir
-            self.csv_path = session_dir / "can_messages.csv"
+            self.csv_path = self._csv_path_for_index(session_dir, 1)
+            self.csv_file_index = 1
             self.started_at = started_at
 
         return session_dir
@@ -94,10 +101,29 @@ class CsvSessionLogger:
             candidate = self.root_dir / f"{base_name}_{index:02d}"
         return candidate
 
+    def _csv_path_for_index(self, session_dir: Path, file_index: int) -> Path:
+        if file_index <= 1:
+            return session_dir / "can_messages.csv"
+        return session_dir / f"can_messages_{file_index:03d}.csv"
+
+    def _open_csv_file(self, session_dir: Path, file_index: int):
+        path = self._csv_path_for_index(session_dir, file_index)
+        csv_file = path.open("w", newline="", encoding="utf-8-sig")
+        writer = csv.writer(csv_file, delimiter=",", quotechar='"', quoting=csv.QUOTE_MINIMAL)
+        writer.writerow(self.HEADER)
+        csv_file.flush()
+        with self._state_lock:
+            self.csv_path = path
+            self.csv_file_index = file_index
+        return csv_file, writer
+
     def _writer_loop(self) -> None:
         csv_file = None
         writer = None
         session_started_at: datetime | None = None
+        active_session_dir: Path | None = None
+        csv_file_index = 1
+        rows_in_current_file = 0
         record_number = 0
         pending_flush = 0
 
@@ -118,14 +144,10 @@ class CsvSessionLogger:
                         csv_file.close()
 
                     session_dir.mkdir(parents=True, exist_ok=True)
-                    csv_file = (session_dir / "can_messages.csv").open(
-                        "w",
-                        newline="",
-                        encoding="utf-8-sig",
-                    )
-                    writer = csv.writer(csv_file, delimiter=",", quotechar='"', quoting=csv.QUOTE_MINIMAL)
-                    writer.writerow(self.HEADER)
-                    csv_file.flush()
+                    active_session_dir = session_dir
+                    csv_file_index = 1
+                    rows_in_current_file = 0
+                    csv_file, writer = self._open_csv_file(active_session_dir, csv_file_index)
                     session_started_at = started_at
                     record_number = 0
                     pending_flush = 0
@@ -138,9 +160,19 @@ class CsvSessionLogger:
                 if not writer or not session_started_at:
                     continue
 
+                if active_session_dir is not None and rows_in_current_file >= self.max_rows_per_file:
+                    if csv_file:
+                        csv_file.flush()
+                        csv_file.close()
+                    csv_file_index += 1
+                    rows_in_current_file = 0
+                    csv_file, writer = self._open_csv_file(active_session_dir, csv_file_index)
+                    pending_flush = 0
+
                 record_number += 1
                 row = self._row_from_payload(record_number, session_started_at, payload)
                 writer.writerow(row)
+                rows_in_current_file += 1
                 pending_flush += 1
 
                 if pending_flush >= 100:

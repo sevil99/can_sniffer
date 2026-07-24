@@ -61,6 +61,9 @@ TIME_MODE_RELATIVE = "relative"
 TIME_MODE_ABSOLUTE = "absolute"
 TIME_MODE_CHOICES = (TIME_MODE_RELATIVE, TIME_MODE_ABSOLUTE)
 TIMESEC_DECIMALS = 3
+EXCEL_MAX_ROWS = 1_048_576
+EXCEL_DATA_ROWS_PER_SHEET = EXCEL_MAX_ROWS - 1
+EXCEL_MAX_COLUMNS = 16_384
 
 
 ID_COL_CANDIDATES = (
@@ -185,11 +188,34 @@ def discover_columns(df: PandasDataFrame) -> TableColumns:
     )
 
 
+def expand_rotated_can_logs(paths: list[str | Path]) -> list[Path]:
+    expanded: list[Path] = []
+    seen: set[Path] = set()
+
+    for raw_path in paths:
+        path = Path(raw_path)
+        candidates = [path]
+        if path.is_file() and re.fullmatch(r"can_messages(?:_\d{3})?\.csv", path.name, flags=re.IGNORECASE):
+            candidates = sorted(path.parent.glob("can_messages*.csv"))
+
+        for candidate in candidates:
+            resolved = candidate.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            expanded.append(candidate)
+
+    return expanded
+
+
 def read_input_files(paths: list[str | Path], progress: ProgressCallback | None = None) -> PandasDataFrame:
     frames: list[PandasDataFrame] = []
-    total_files = len(paths)
-    for file_index, raw_path in enumerate(paths, start=1):
-        path = Path(raw_path)
+    input_paths = expand_rotated_can_logs(paths)
+    total_files = len(input_paths)
+    if total_files != len(paths):
+        report_progress(progress, f"Найдены части CSV-сессии: {total_files} файлов", None)
+
+    for file_index, path in enumerate(input_paths, start=1):
         report_progress(progress, f"Читаю файл {file_index}/{total_files}: {path.name}", None)
         if path.suffix.lower() in (".xlsx", ".xls", ".xlsm"):
             sheets = pd.read_excel(path, sheet_name=None)
@@ -660,6 +686,57 @@ def add_relative_time_column(decoded: PandasDataFrame) -> PandasDataFrame:
     return decoded
 
 
+def excel_file_count(row_count: int) -> int:
+    return max(1, (row_count + EXCEL_DATA_ROWS_PER_SHEET - 1) // EXCEL_DATA_ROWS_PER_SHEET)
+
+
+def format_excel_time_column(worksheet: Any, time_column: str) -> None:
+    if time_column == "TimeSec":
+        number_format = "0.000"
+    elif time_column == "Time":
+        number_format = "hh:mm:ss.000"
+    else:
+        return
+
+    for column_cells in worksheet.iter_cols(min_col=1, max_col=1, min_row=2):
+        for cell in column_cells:
+            cell.number_format = number_format
+
+
+def excel_output_path_for_index(output_path: str | Path, file_index: int) -> Path:
+    path = Path(output_path)
+    if file_index <= 1:
+        return path
+    suffix = path.suffix or ".xlsx"
+    return path.with_name(f"{path.stem}_{file_index:03d}{suffix}")
+
+
+def write_dataframe_to_excel(output_path: str | Path, df: PandasDataFrame, progress: ProgressCallback | None = None) -> list[Path]:
+    if len(df.columns) > EXCEL_MAX_COLUMNS:
+        raise ValueError(
+            f"Excel поддерживает не больше {EXCEL_MAX_COLUMNS} столбцов на лист, "
+            f"а в таблице получилось {len(df.columns)}."
+        )
+
+    time_column = str(df.columns[0]) if len(df.columns) else ""
+    file_count = excel_file_count(len(df))
+    output_paths: list[Path] = []
+    for file_index in range(file_count):
+        start = file_index * EXCEL_DATA_ROWS_PER_SHEET
+        end = min(start + EXCEL_DATA_ROWS_PER_SHEET, len(df))
+        part_path = excel_output_path_for_index(output_path, file_index + 1)
+        chunk = df.iloc[start:end] if len(df) else df
+        if file_count == 1:
+            report_progress(progress, f"Запись файла {part_path.name}: строк {len(chunk)}", None)
+        else:
+            report_progress(progress, f"Запись файла {file_index + 1}/{file_count}: {part_path.name}, строки {start + 1}-{end} из {len(df)}", None)
+        with pd.ExcelWriter(part_path, engine="openpyxl") as writer:
+            chunk.to_excel(writer, sheet_name="data", index=False)
+            format_excel_time_column(writer.sheets["data"], time_column)
+        output_paths.append(part_path)
+    return output_paths
+
+
 def convert_files_to_excel(
     input_paths: list[str | Path],
     template_path: str | Path,
@@ -667,7 +744,7 @@ def convert_files_to_excel(
     selected_signals: set[str] | None = None,
     time_mode: str | None = None,
     progress: ProgressCallback | None = None,
-) -> None:
+) -> list[Path]:
     report_progress(progress, "Загрузка шаблона", None)
     template = ProjectTemplate.load(template_path)
     if time_mode is None:
@@ -678,18 +755,12 @@ def convert_files_to_excel(
     wide = decode_dataframe(source, template, time_mode=time_mode, progress=progress)
 
     report_progress(progress, f"Запись Excel: {output_path}", None)
-    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        wide.to_excel(writer, sheet_name="data", index=False)
-        worksheet = writer.sheets["data"]
-        if len(wide.columns) > 0 and wide.columns[0] == "TimeSec":
-            for column_cells in worksheet.iter_cols(min_col=1, max_col=1, min_row=2):
-                for cell in column_cells:
-                    cell.number_format = "0.000"
-        elif len(wide.columns) > 0 and wide.columns[0] == "Time":
-            for column_cells in worksheet.iter_cols(min_col=1, max_col=1, min_row=2):
-                for cell in column_cells:
-                    cell.number_format = "hh:mm:ss.000"
-    report_progress(progress, "Excel сохранен", 1.0)
+    output_paths = write_dataframe_to_excel(output_path, wide, progress=progress)
+    if len(output_paths) == 1:
+        report_progress(progress, f"Excel сохранен: {output_paths[0]}", 1.0)
+    else:
+        report_progress(progress, f"Excel сохранен: {len(output_paths)} файлов", 1.0)
+    return output_paths
 
 
 def run_cli(argv: list[str]) -> None:
@@ -750,7 +821,7 @@ def run_cli(argv: list[str]) -> None:
         console_status(f"Сигналы: {', '.join(sorted(selected_signals))}")
     console_status(f"Время: {time_mode_label(time_mode)}")
     console_status(f"Выходной файл: {output_path}")
-    convert_files_to_excel(
+    output_paths = convert_files_to_excel(
         args.files,
         template_path,
         output_path,
@@ -758,7 +829,12 @@ def run_cli(argv: list[str]) -> None:
         time_mode=time_mode,
         progress=cli_progress,
     )
-    console_status("Готово")
+    if len(output_paths) == 1:
+        console_status("Готово")
+    else:
+        console_status(f"Готово, создано файлов: {len(output_paths)}")
+        for path in output_paths:
+            console_status(str(path))
 
 
 def choose_template(root: tk.Tk) -> Path | None:
@@ -1140,7 +1216,7 @@ def main() -> None:
                 set_status(root, f"{message} ({int(fraction * 100)}%)")
 
         set_status(root, "Расшифровка сообщения и запись Excel...")
-        convert_files_to_excel(
+        output_paths = convert_files_to_excel(
             sorted(files),
             template_path,
             save_path,
@@ -1148,8 +1224,13 @@ def main() -> None:
             time_mode=time_mode,
             progress=gui_progress,
         )
-        set_status(root, f"Готово: {save_path}")
-        messagebox.showinfo("Готово", f"Файл создан:\n{save_path}", parent=root)
+        if len(output_paths) == 1:
+            set_status(root, f"Готово: {output_paths[0]}")
+            messagebox.showinfo("Готово", f"Файл создан:\n{output_paths[0]}", parent=root)
+        else:
+            files_text = "\n".join(str(path) for path in output_paths)
+            set_status(root, f"Готово: создано файлов {len(output_paths)}")
+            messagebox.showinfo("Готово", f"Создано файлов: {len(output_paths)}\n\n{files_text}", parent=root)
 
     except Exception as error:
         set_status(root, f"Ошибка: {error}")

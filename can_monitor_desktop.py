@@ -1457,12 +1457,14 @@ class CanMonitorApp:
         self.count_var.set(
             f"Сообщений: {self.session_messages} | точек: {self.parsed_points} | очередь: {queue_size} | CSV drop: {dropped}"
         )
+        self._update_session_label()
 
     def _update_session_label(self) -> None:
         if not self.logger or not self.logger.session_dir:
             self.session_var.set("Сессия: не выбрана")
             return
-        self.session_var.set(f"Сессия: {self.logger.session_dir}")
+        csv_name = self.logger.csv_path.name if self.logger.csv_path else "can_messages.csv"
+        self.session_var.set(f"Сессия: {self.logger.session_dir} | CSV: {csv_name}")
 
     def close(self) -> None:
         if self._closing:

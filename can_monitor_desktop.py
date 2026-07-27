@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import deque
 from datetime import datetime
 from pathlib import Path
+import math
 import queue
 import threading
 import time
@@ -62,6 +63,8 @@ CHART_COLORS = (
     "#be185d",
     "#0891b2",
 )
+
+MAX_RENDERED_CHART_POINTS = 1200
 
 
 class CanReader(threading.Thread):
@@ -214,21 +217,17 @@ class SignalChart(ttk.Frame):
             self._draw_markers(canvas, markers, start_time, span, left, right, top, bottom)
             return
 
-        if len(recent) > 1200:
-            step = max(1, len(recent) // 1200)
-            recent = recent[::step]
+        finite_values = [value for _, value in recent if math.isfinite(value)]
+        if not finite_values:
+            canvas.create_text(width / 2, height / 2, text="Нет числовых данных", fill="#6b7280", font=("Segoe UI", 10))
+            canvas.create_line(left, bottom, right, bottom, fill="#9ca3af")
+            canvas.create_line(left, top, left, bottom, fill="#9ca3af")
+            self._draw_markers(canvas, markers, start_time, span, left, right, top, bottom)
+            return
 
-        values = [value for _, value in recent]
-        min_value = min(values)
-        max_value = max(values)
-        if min_value == max_value:
-            padding = 1.0 if min_value == 0 else abs(min_value) * 0.05
-            min_value -= padding
-            max_value += padding
-        else:
-            padding = (max_value - min_value) * 0.08
-            min_value -= padding
-            max_value += padding
+        min_value, max_value = self._value_range(finite_values)
+        recent = [(timestamp, value) for timestamp, value in recent if math.isfinite(value)]
+        recent = self._downsample_points(recent, MAX_RENDERED_CHART_POINTS)
 
         value_span = max(max_value - min_value, 1e-9)
 
@@ -256,6 +255,40 @@ class SignalChart(ttk.Frame):
             canvas.create_oval(x - 2, y - 2, x + 2, y + 2, fill=self.color, outline=self.color)
 
         self._draw_cursor()
+
+    def _value_range(self, values: list[float]) -> tuple[float, float]:
+        min_value = min(values)
+        max_value = max(values)
+
+        if min_value == max_value:
+            padding = 1.0 if min_value == 0 else abs(min_value) * 0.05
+        else:
+            padding = (max_value - min_value) * 0.08
+
+        return min_value - padding, max_value + padding
+
+    def _downsample_points(
+        self,
+        points: list[tuple[float, float]],
+        max_points: int,
+    ) -> list[tuple[float, float]]:
+        if len(points) <= max_points:
+            return points
+
+        bucket_count = max(1, max_points // 2)
+        step = max(1, math.ceil(len(points) / bucket_count))
+        selected: dict[int, tuple[float, float]] = {}
+
+        for start in range(0, len(points), step):
+            bucket = points[start : start + step]
+            if not bucket:
+                continue
+            min_offset, min_point = min(enumerate(bucket), key=lambda item: item[1][1])
+            max_offset, max_point = max(enumerate(bucket), key=lambda item: item[1][1])
+            selected[start + min_offset] = min_point
+            selected[start + max_offset] = max_point
+
+        return [selected[index] for index in sorted(selected)]
 
     def _on_cursor_motion(self, event: tk.Event) -> None:
         self.hover_position = (int(event.x), int(event.y))

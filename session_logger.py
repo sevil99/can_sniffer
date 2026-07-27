@@ -10,6 +10,8 @@ from typing import Any
 
 EXCEL_MAX_ROWS = 1_048_576
 CSV_DATA_ROWS_PER_FILE = EXCEL_MAX_ROWS - 1
+CSV_WRITE_BATCH_SIZE = 1000
+CSV_FLUSH_ROWS = 5000
 
 
 class CsvSessionLogger:
@@ -126,15 +128,75 @@ class CsvSessionLogger:
         rows_in_current_file = 0
         record_number = 0
         pending_flush = 0
+        deferred_command: tuple[str, Any] | None = None
+
+        def collect_message_batch(first_payload: Any) -> list[Any]:
+            nonlocal deferred_command
+
+            payloads = [first_payload]
+            while len(payloads) < CSV_WRITE_BATCH_SIZE:
+                try:
+                    next_command, next_payload = self._commands.get_nowait()
+                except queue.Empty:
+                    break
+
+                if next_command != "message":
+                    deferred_command = (next_command, next_payload)
+                    break
+
+                payloads.append(next_payload)
+            return payloads
+
+        def write_rows(rows: list[list[Any]]) -> None:
+            nonlocal pending_flush
+
+            if not rows or not writer or not csv_file:
+                return
+
+            writer.writerows(rows)
+            pending_flush += len(rows)
+            rows.clear()
+
+            if pending_flush >= CSV_FLUSH_ROWS:
+                csv_file.flush()
+                pending_flush = 0
+
+        def write_message_batch(payloads: list[Any]) -> None:
+            nonlocal csv_file, writer, csv_file_index, rows_in_current_file, record_number, pending_flush
+
+            if not writer or not session_started_at:
+                return
+
+            rows: list[list[Any]] = []
+            for message_payload in payloads:
+                if active_session_dir is not None and rows_in_current_file >= self.max_rows_per_file:
+                    write_rows(rows)
+                    if csv_file:
+                        csv_file.flush()
+                        csv_file.close()
+                    csv_file_index += 1
+                    rows_in_current_file = 0
+                    csv_file, writer = self._open_csv_file(active_session_dir, csv_file_index)
+                    pending_flush = 0
+
+                record_number += 1
+                rows.append(self._row_from_payload(record_number, session_started_at, message_payload))
+                rows_in_current_file += 1
+
+            write_rows(rows)
 
         while True:
-            try:
-                command, payload = self._commands.get(timeout=0.5)
-            except queue.Empty:
-                if csv_file and pending_flush:
-                    csv_file.flush()
-                    pending_flush = 0
-                continue
+            if deferred_command is not None:
+                command, payload = deferred_command
+                deferred_command = None
+            else:
+                try:
+                    command, payload = self._commands.get(timeout=0.5)
+                except queue.Empty:
+                    if csv_file and pending_flush:
+                        csv_file.flush()
+                        pending_flush = 0
+                    continue
 
             if command == "rotate":
                 session_dir, started_at, done, result = payload
@@ -157,27 +219,7 @@ class CsvSessionLogger:
                     done.set()
 
             elif command == "message":
-                if not writer or not session_started_at:
-                    continue
-
-                if active_session_dir is not None and rows_in_current_file >= self.max_rows_per_file:
-                    if csv_file:
-                        csv_file.flush()
-                        csv_file.close()
-                    csv_file_index += 1
-                    rows_in_current_file = 0
-                    csv_file, writer = self._open_csv_file(active_session_dir, csv_file_index)
-                    pending_flush = 0
-
-                record_number += 1
-                row = self._row_from_payload(record_number, session_started_at, payload)
-                writer.writerow(row)
-                rows_in_current_file += 1
-                pending_flush += 1
-
-                if pending_flush >= 100:
-                    csv_file.flush()
-                    pending_flush = 0
+                write_message_batch(collect_message_batch(payload))
 
             elif command == "stop":
                 done = payload

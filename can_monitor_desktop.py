@@ -420,8 +420,8 @@ class CanMonitorApp:
         self.discovered_id_display_values: dict[str, str] = {}
         self.can_id_catalog = load_can_id_catalog()
         self.can_event_decoder = load_can_event_decoder()
-        self.recent_rows: deque[tuple[Any, ...]] = deque(maxlen=200)
-        self.event_rows: deque[tuple[tuple[Any, ...], str]] = deque(maxlen=1000)
+        self.recent_rows: deque[dict[str, Any]] = deque(maxlen=200)
+        self.event_rows: deque[dict[str, Any]] = deque(maxlen=1000)
         self.last_event_values: dict[str, str] = {}
 
         self.session_messages = 0
@@ -445,9 +445,21 @@ class CanMonitorApp:
         self.status_var = tk.StringVar(value="Выберите папку для сессий")
         self.session_var = tk.StringVar(value="Сессия: не выбрана")
         self.count_var = tk.StringVar(value="Сообщений: 0")
+        self.message_filter_count_var = tk.StringVar(value="Показано: 0/0")
         self.event_log_var = tk.StringVar(value="Событий: 0")
+        self.message_search_var = tk.StringVar(value="")
+        self.message_id_filter_var = tk.StringVar(value="")
+        self.message_device_filter_var = tk.StringVar(value="")
+        self.message_only_errors_var = tk.BooleanVar(value=False)
+        self.message_only_transitions_var = tk.BooleanVar(value=False)
+        self.event_search_var = tk.StringVar(value="")
+        self.event_id_filter_var = tk.StringVar(value="")
+        self.event_device_filter_var = tk.StringVar(value="")
+        self.event_only_errors_var = tk.BooleanVar(value=False)
+        self.event_only_transitions_var = tk.BooleanVar(value=False)
 
         self._build_ui()
+        self._bind_filter_traces()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
         self.root.after(100, self._select_initial_session_root)
@@ -606,7 +618,32 @@ class CanMonitorApp:
 
     def _build_messages_tab(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(0, weight=1)
-        parent.rowconfigure(0, weight=1)
+        parent.rowconfigure(1, weight=1)
+
+        toolbar = ttk.Frame(parent, padding=(0, 0, 0, 8))
+        toolbar.grid(row=0, column=0, columnspan=2, sticky="ew")
+        toolbar.columnconfigure(7, weight=1)
+
+        ttk.Label(toolbar, text="Устройство").grid(row=0, column=0, sticky="w", padx=(0, 4))
+        ttk.Entry(toolbar, textvariable=self.message_device_filter_var, width=14).grid(row=0, column=1, sticky="w", padx=(0, 10))
+        ttk.Label(toolbar, text="CAN ID").grid(row=0, column=2, sticky="w", padx=(0, 4))
+        ttk.Entry(toolbar, textvariable=self.message_id_filter_var, width=10).grid(row=0, column=3, sticky="w", padx=(0, 10))
+        ttk.Label(toolbar, text="Поиск").grid(row=0, column=4, sticky="w", padx=(0, 4))
+        ttk.Entry(toolbar, textvariable=self.message_search_var, width=24).grid(row=0, column=5, sticky="ew", padx=(0, 10))
+        ttk.Checkbutton(toolbar, text="Только ошибки", variable=self.message_only_errors_var).grid(
+            row=0,
+            column=6,
+            sticky="w",
+            padx=(0, 10),
+        )
+        ttk.Checkbutton(toolbar, text="Переходы/режимы", variable=self.message_only_transitions_var).grid(
+            row=0,
+            column=7,
+            sticky="w",
+            padx=(0, 10),
+        )
+        ttk.Button(toolbar, text="Сброс", command=self.clear_message_filters).grid(row=0, column=8, sticky="e", padx=(0, 10))
+        ttk.Label(toolbar, textvariable=self.message_filter_count_var).grid(row=0, column=9, sticky="e")
 
         columns = ("n", "time", "ch", "id", "length", "data", "parsed")
         self.messages_tree = ttk.Treeview(parent, columns=columns, show="headings")
@@ -624,8 +661,8 @@ class CanMonitorApp:
 
         scrollbar = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=self.messages_tree.yview)
         self.messages_tree.configure(yscrollcommand=scrollbar.set)
-        self.messages_tree.grid(row=0, column=0, sticky="nsew")
-        scrollbar.grid(row=0, column=1, sticky="ns")
+        self.messages_tree.grid(row=1, column=0, sticky="nsew")
+        scrollbar.grid(row=1, column=1, sticky="ns")
 
     def _build_events_tab(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(0, weight=1)
@@ -633,9 +670,28 @@ class CanMonitorApp:
 
         toolbar = ttk.Frame(parent, padding=(0, 0, 0, 8))
         toolbar.grid(row=0, column=0, columnspan=2, sticky="ew")
-        toolbar.columnconfigure(1, weight=1)
+        toolbar.columnconfigure(9, weight=1)
         ttk.Button(toolbar, text="Очистить", command=self.clear_event_log).grid(row=0, column=0, padx=(0, 8))
-        ttk.Label(toolbar, textvariable=self.event_log_var).grid(row=0, column=1, sticky="e")
+        ttk.Label(toolbar, text="Устройство").grid(row=0, column=1, sticky="w", padx=(0, 4))
+        ttk.Entry(toolbar, textvariable=self.event_device_filter_var, width=14).grid(row=0, column=2, sticky="w", padx=(0, 10))
+        ttk.Label(toolbar, text="CAN ID").grid(row=0, column=3, sticky="w", padx=(0, 4))
+        ttk.Entry(toolbar, textvariable=self.event_id_filter_var, width=10).grid(row=0, column=4, sticky="w", padx=(0, 10))
+        ttk.Label(toolbar, text="Поиск").grid(row=0, column=5, sticky="w", padx=(0, 4))
+        ttk.Entry(toolbar, textvariable=self.event_search_var, width=24).grid(row=0, column=6, sticky="ew", padx=(0, 10))
+        ttk.Checkbutton(toolbar, text="Только ошибки", variable=self.event_only_errors_var).grid(
+            row=0,
+            column=7,
+            sticky="w",
+            padx=(0, 10),
+        )
+        ttk.Checkbutton(toolbar, text="Переходы/режимы", variable=self.event_only_transitions_var).grid(
+            row=0,
+            column=8,
+            sticky="w",
+            padx=(0, 10),
+        )
+        ttk.Button(toolbar, text="Сброс", command=self.clear_event_filters).grid(row=0, column=9, sticky="w", padx=(0, 10))
+        ttk.Label(toolbar, textvariable=self.event_log_var).grid(row=0, column=10, sticky="e")
 
         columns = ("time", "level", "device", "event", "details", "ch", "id", "data")
         self.events_tree = ttk.Treeview(parent, columns=columns, show="headings")
@@ -683,6 +739,33 @@ class CanMonitorApp:
         self.stats_tree.configure(yscrollcommand=scrollbar.set)
         self.stats_tree.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
+
+    def _bind_filter_traces(self) -> None:
+        message_vars = (
+            self.message_search_var,
+            self.message_id_filter_var,
+            self.message_device_filter_var,
+            self.message_only_errors_var,
+            self.message_only_transitions_var,
+        )
+        event_vars = (
+            self.event_search_var,
+            self.event_id_filter_var,
+            self.event_device_filter_var,
+            self.event_only_errors_var,
+            self.event_only_transitions_var,
+        )
+
+        for variable in message_vars:
+            variable.trace_add("write", lambda *_args: self._mark_message_filter_dirty())
+        for variable in event_vars:
+            variable.trace_add("write", lambda *_args: self._mark_event_filter_dirty())
+
+    def _mark_message_filter_dirty(self) -> None:
+        self._message_table_dirty = True
+
+    def _mark_event_filter_dirty(self) -> None:
+        self._event_table_dirty = True
 
     def _select_initial_session_root(self) -> None:
         folder = filedialog.askdirectory(title="Выберите папку, где хранить папки сессий")
@@ -1288,6 +1371,22 @@ class CanMonitorApp:
         self._event_table_dirty = True
         self.status_var.set("Журнал событий очищен")
 
+    def clear_message_filters(self) -> None:
+        self.message_search_var.set("")
+        self.message_id_filter_var.set("")
+        self.message_device_filter_var.set("")
+        self.message_only_errors_var.set(False)
+        self.message_only_transitions_var.set(False)
+        self._message_table_dirty = True
+
+    def clear_event_filters(self) -> None:
+        self.event_search_var.set("")
+        self.event_id_filter_var.set("")
+        self.event_device_filter_var.set("")
+        self.event_only_errors_var.set(False)
+        self.event_only_transitions_var.set(False)
+        self._event_table_dirty = True
+
     def autoscale_graphs(self) -> None:
         self.status_var.set("Автомасштаб применен")
         self._update_graph_state()
@@ -1439,7 +1538,8 @@ class CanMonitorApp:
             self.logger.log_message(can_message, channel, parsed)
 
         self._update_can_id_stats(can_message, channel, timestamp)
-        self._remember_can_events(can_message, channel, timestamp)
+        decoded_events = self.can_event_decoder.decode(can_message, channel)
+        self._remember_can_events(decoded_events, timestamp)
 
         for signal_key, value in parsed.items():
             chart = self.charts.get(signal_key)
@@ -1447,7 +1547,7 @@ class CanMonitorApp:
                 chart.append(timestamp, value)
 
         self._remember_discovered_id(can_message, channel)
-        self._remember_message_row(can_message, channel, parsed)
+        self._remember_message_row(can_message, channel, parsed, decoded_events)
 
     def _update_can_id_stats(self, can_message: Any, channel: int, timestamp: float) -> None:
         try:
@@ -1485,8 +1585,8 @@ class CanMonitorApp:
         stats["sample"] = data_hex
         self._stats_table_dirty = True
 
-    def _remember_can_events(self, can_message: Any, channel: int, timestamp: float) -> None:
-        for decoded_event in self.can_event_decoder.decode(can_message, channel):
+    def _remember_can_events(self, decoded_events: list[DecodedCanEvent], timestamp: float) -> None:
+        for decoded_event in decoded_events:
             if not self._should_log_can_event(decoded_event):
                 continue
             self._remember_event_row(decoded_event, timestamp)
@@ -1515,7 +1615,16 @@ class CanMonitorApp:
             decoded_event.can_id,
             decoded_event.data_hex,
         )
-        self.event_rows.appendleft((values, decoded_event.severity))
+        self.event_rows.appendleft(
+            {
+                "values": values,
+                "severity": decoded_event.severity,
+                "category": decoded_event.category,
+                "can_id": decoded_event.can_id,
+                "device": decoded_event.device,
+                "search": self._build_search_text(values, decoded_event.category, decoded_event.source_name),
+            }
+        )
         self.decoded_events += 1
         self.event_log_var.set(f"Событий: {self.decoded_events}")
         self._event_table_dirty = True
@@ -1527,6 +1636,10 @@ class CanMonitorApp:
             "warning": "Внимание",
             "info": "Инфо",
         }.get(severity, severity)
+
+    @staticmethod
+    def _build_search_text(*parts: Any) -> str:
+        return " ".join(str(part) for part in parts if part is not None).lower()
 
     def _remember_discovered_id(self, can_message: Any, channel: int) -> None:
         try:
@@ -1577,7 +1690,13 @@ class CanMonitorApp:
 
         return numeric_id, channel, display_value
 
-    def _remember_message_row(self, can_message: Any, channel: int, parsed: dict[str, float]) -> None:
+    def _remember_message_row(
+        self,
+        can_message: Any,
+        channel: int,
+        parsed: dict[str, float],
+        decoded_events: list[DecodedCanEvent],
+    ) -> None:
         received_at = getattr(can_message, "receive_time", None)
         if isinstance(received_at, datetime):
             time_text = received_at.strftime("%H:%M:%S.%f")[:-3]
@@ -1597,7 +1716,24 @@ class CanMonitorApp:
             for key, value in parsed.items()
         )
 
-        self.recent_rows.appendleft((self.session_messages, time_text, channel, can_id, length, data_hex, parsed_text))
+        device_label = self.can_id_catalog.describe(can_id, channel)
+        categories = {event.category for event in decoded_events if event.category}
+        severities = {event.severity for event in decoded_events if event.severity}
+        event_text = " ".join(
+            f"{event.device} {event.title} {event.details} {event.category} {event.severity}"
+            for event in decoded_events
+        )
+        values = (self.session_messages, time_text, channel, can_id, length, data_hex, parsed_text)
+        self.recent_rows.appendleft(
+            {
+                "values": values,
+                "can_id": str(can_id),
+                "device": device_label,
+                "categories": categories,
+                "severities": severities,
+                "search": self._build_search_text(values, device_label, event_text),
+            }
+        )
         self._message_table_dirty = True
 
     def _refresh_message_table(self) -> None:
@@ -1607,8 +1743,10 @@ class CanMonitorApp:
         if self._message_table_dirty:
             for item in self.messages_tree.get_children():
                 self.messages_tree.delete(item)
-            for row in self.recent_rows:
-                self.messages_tree.insert("", tk.END, values=row)
+            visible_rows = [row for row in self.recent_rows if self._message_row_matches_filters(row)]
+            for row in visible_rows:
+                self.messages_tree.insert("", tk.END, values=row["values"])
+            self.message_filter_count_var.set(f"Показано: {len(visible_rows)}/{len(self.recent_rows)}")
             self._message_table_dirty = False
 
         if self._stats_table_dirty:
@@ -1622,12 +1760,66 @@ class CanMonitorApp:
         if not self._closing:
             self.root.after(250, self._refresh_message_table)
 
+    def _message_row_matches_filters(self, row: dict[str, Any]) -> bool:
+        if not self._can_id_matches_filter(str(row.get("can_id", "")), self.message_id_filter_var.get()):
+            return False
+
+        if not self._text_matches_filter(str(row.get("device", "")), self.message_device_filter_var.get()):
+            return False
+
+        categories = set(row.get("categories") or ())
+        severities = set(row.get("severities") or ())
+        if self.message_only_errors_var.get() and "error" not in categories and "error" not in severities:
+            return False
+
+        if self.message_only_transitions_var.get() and not categories.intersection({"transition", "mode"}):
+            return False
+
+        return self._text_matches_filter(str(row.get("search", "")), self.message_search_var.get())
+
+    def _event_row_matches_filters(self, row: dict[str, Any]) -> bool:
+        if not self._can_id_matches_filter(str(row.get("can_id", "")), self.event_id_filter_var.get()):
+            return False
+
+        if not self._text_matches_filter(str(row.get("device", "")), self.event_device_filter_var.get()):
+            return False
+
+        category = str(row.get("category", ""))
+        severity = str(row.get("severity", ""))
+        if self.event_only_errors_var.get() and category != "error" and severity != "error":
+            return False
+
+        if self.event_only_transitions_var.get() and category not in {"transition", "mode"}:
+            return False
+
+        return self._text_matches_filter(str(row.get("search", "")), self.event_search_var.get())
+
+    @staticmethod
+    def _text_matches_filter(value: str, filter_text: str) -> bool:
+        needle = filter_text.strip().lower()
+        if not needle:
+            return True
+        return needle in value.lower()
+
+    @staticmethod
+    def _can_id_matches_filter(can_id: str, filter_text: str) -> bool:
+        needle = filter_text.strip()
+        if not needle:
+            return True
+
+        try:
+            return normalize_can_id(can_id) == normalize_can_id(needle)
+        except Exception:
+            return needle.upper() in can_id.upper()
+
     def _refresh_event_table(self) -> None:
         for item in self.events_tree.get_children():
             self.events_tree.delete(item)
 
-        for values, severity in self.event_rows:
-            self.events_tree.insert("", tk.END, values=values, tags=(severity,))
+        visible_rows = [row for row in self.event_rows if self._event_row_matches_filters(row)]
+        for row in visible_rows:
+            self.events_tree.insert("", tk.END, values=row["values"], tags=(row["severity"],))
+        self.event_log_var.set(f"Событий: {self.decoded_events} | показано: {len(visible_rows)}/{len(self.event_rows)}")
 
     def _refresh_stats_table(self) -> None:
         for item in self.stats_tree.get_children():
@@ -1692,6 +1884,7 @@ class CanMonitorApp:
         self._stats_table_dirty = True
         self._event_table_dirty = True
         self.decoded_events = 0
+        self.message_filter_count_var.set("Показано: 0/0")
         self.event_log_var.set("Событий: 0")
         for chart in self.charts.values():
             chart.clear()

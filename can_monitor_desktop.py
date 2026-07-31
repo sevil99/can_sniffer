@@ -10,7 +10,7 @@ import time
 import traceback
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-from typing import Any
+from typing import Any, Callable
 
 from built_in_templates import (
     BUILT_IN_TEMPLATES,
@@ -149,10 +149,17 @@ class CanReader(threading.Thread):
 
 
 class SignalChart(ttk.Frame):
-    def __init__(self, parent: tk.Widget, signal: SignalDefinition, color: str):
+    def __init__(
+        self,
+        parent: tk.Widget,
+        signal: SignalDefinition,
+        color: str,
+        redraw_callback: Callable[[], None] | None = None,
+    ):
         super().__init__(parent, padding=(8, 6))
         self.signal = signal
         self.color = color
+        self.redraw_callback = redraw_callback
         self.points: deque[tuple[float, float]] = deque(maxlen=50000)
         self.rendered_points: list[tuple[float, float, float, float]] = []
         self.plot_bounds: tuple[int, int, int, int] | None = None
@@ -160,15 +167,20 @@ class SignalChart(ttk.Frame):
 
         self.title_var = tk.StringVar(value=signal.label)
         self.value_var = tk.StringVar(value="нет данных")
+        self.zero_y_var = tk.BooleanVar(value=False)
 
         header = ttk.Frame(self)
         header.pack(fill=tk.X)
         ttk.Label(header, textvariable=self.title_var, font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT)
         ttk.Label(header, textvariable=self.value_var).pack(side=tk.RIGHT)
+        ttk.Checkbutton(header, text="Y от 0", variable=self.zero_y_var, command=self._request_redraw).pack(
+            side=tk.RIGHT,
+            padx=(0, 12),
+        )
 
         self.canvas = tk.Canvas(self, height=170, background="#ffffff", highlightthickness=1, highlightbackground="#d6dbe1")
         self.canvas.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
-        self.canvas.bind("<Configure>", lambda _event: self.draw(time.time(), 600, []))
+        self.canvas.bind("<Configure>", lambda _event: self._request_redraw())
         self.canvas.bind("<Motion>", self._on_cursor_motion)
         self.canvas.bind("<Leave>", self._on_cursor_leave)
 
@@ -207,7 +219,7 @@ class SignalChart(ttk.Frame):
         recent = [
             (timestamp, value)
             for timestamp, value in self.points
-            if now - timestamp <= history_seconds
+            if start_time <= timestamp <= now
         ]
 
         if not recent:
@@ -225,7 +237,7 @@ class SignalChart(ttk.Frame):
             self._draw_markers(canvas, markers, start_time, span, left, right, top, bottom)
             return
 
-        min_value, max_value = self._value_range(finite_values)
+        min_value, max_value = self._value_range(finite_values, zero_based=self.zero_y_var.get())
         recent = [(timestamp, value) for timestamp, value in recent if math.isfinite(value)]
         recent = self._downsample_points(recent, MAX_RENDERED_CHART_POINTS)
 
@@ -244,8 +256,8 @@ class SignalChart(ttk.Frame):
         canvas.create_line(left, top, left, bottom, fill="#9ca3af")
         canvas.create_text(8, top + 2, anchor="nw", text=f"{max_value:.4g}", fill="#475569", font=("Segoe UI", 8))
         canvas.create_text(8, bottom - 12, anchor="nw", text=f"{min_value:.4g}", fill="#475569", font=("Segoe UI", 8))
-        canvas.create_text(left, height - 18, anchor="nw", text=f"-{history_seconds}s", fill="#64748b", font=("Segoe UI", 8))
-        canvas.create_text(right, height - 18, anchor="ne", text="сейчас", fill="#64748b", font=("Segoe UI", 8))
+        canvas.create_text(left, height - 18, anchor="nw", text=datetime.fromtimestamp(start_time).strftime("%H:%M:%S"), fill="#64748b", font=("Segoe UI", 8))
+        canvas.create_text(right, height - 18, anchor="ne", text=datetime.fromtimestamp(now).strftime("%H:%M:%S"), fill="#64748b", font=("Segoe UI", 8))
         self._draw_markers(canvas, markers, start_time, span, left, right, top, bottom)
 
         if len(coords) >= 4:
@@ -256,9 +268,20 @@ class SignalChart(ttk.Frame):
 
         self._draw_cursor()
 
-    def _value_range(self, values: list[float]) -> tuple[float, float]:
+    def _value_range(self, values: list[float], zero_based: bool = False) -> tuple[float, float]:
         min_value = min(values)
         max_value = max(values)
+
+        if zero_based:
+            if min_value >= 0:
+                min_value = 0.0
+                if max_value == 0:
+                    return 0.0, 1.0
+                return min_value, max_value + (max_value - min_value) * 0.08
+
+            if max_value <= 0:
+                max_value = 0.0
+                return min_value - (max_value - min_value) * 0.08, max_value
 
         if min_value == max_value:
             padding = 1.0 if min_value == 0 else abs(min_value) * 0.05
@@ -266,6 +289,12 @@ class SignalChart(ttk.Frame):
             padding = (max_value - min_value) * 0.08
 
         return min_value - padding, max_value + padding
+
+    def _request_redraw(self) -> None:
+        if self.redraw_callback is not None:
+            self.redraw_callback()
+        else:
+            self.draw(time.time(), 600, [])
 
     def _downsample_points(
         self,
@@ -399,6 +428,7 @@ class CanMonitorApp:
         self._closing = False
         self.graph_paused = False
         self.graph_pause_time: float | None = None
+        self.graph_view_offset_seconds = 0.0
         self.time_markers: list[float] = []
         self.can_id_stats: dict[str, dict[str, Any]] = {}
 
@@ -524,7 +554,7 @@ class CanMonitorApp:
 
         graph_toolbar = ttk.Frame(parent, padding=(0, 0, 0, 8))
         graph_toolbar.grid(row=0, column=0, columnspan=2, sticky="ew")
-        graph_toolbar.columnconfigure(9, weight=1)
+        graph_toolbar.columnconfigure(11, weight=1)
 
         self.pause_graph_button = ttk.Button(graph_toolbar, text="Пауза", command=self.toggle_graph_pause)
         self.pause_graph_button.grid(row=0, column=0, padx=(0, 4))
@@ -532,10 +562,12 @@ class CanMonitorApp:
         ttk.Button(graph_toolbar, text="Автомасштаб", command=self.autoscale_graphs).grid(row=0, column=2, padx=4)
         ttk.Button(graph_toolbar, text="Масштаб +", command=lambda: self.zoom_time_window(0.5)).grid(row=0, column=3, padx=4)
         ttk.Button(graph_toolbar, text="Масштаб -", command=lambda: self.zoom_time_window(2.0)).grid(row=0, column=4, padx=4)
-        ttk.Button(graph_toolbar, text="Вернуться к live", command=self.return_to_live).grid(row=0, column=5, padx=4)
-        ttk.Button(graph_toolbar, text="Маркер", command=self.add_time_marker).grid(row=0, column=6, padx=4)
-        ttk.Button(graph_toolbar, text="Стереть маркеры", command=self.clear_time_markers).grid(row=0, column=7, padx=4)
-        ttk.Label(graph_toolbar, textvariable=self.graph_state_var).grid(row=0, column=9, sticky="e")
+        ttk.Button(graph_toolbar, text="< Назад", command=lambda: self.pan_graph_time(-1)).grid(row=0, column=5, padx=4)
+        ttk.Button(graph_toolbar, text="Вперед >", command=lambda: self.pan_graph_time(1)).grid(row=0, column=6, padx=4)
+        ttk.Button(graph_toolbar, text="Вернуться к live", command=self.return_to_live).grid(row=0, column=7, padx=4)
+        ttk.Button(graph_toolbar, text="Маркер", command=self.add_time_marker).grid(row=0, column=8, padx=4)
+        ttk.Button(graph_toolbar, text="Стереть маркеры", command=self.clear_time_markers).grid(row=0, column=9, padx=4)
+        ttk.Label(graph_toolbar, textvariable=self.graph_state_var).grid(row=0, column=11, sticky="e")
 
         self.charts_canvas = tk.Canvas(parent, background="#f8fafc", highlightthickness=0)
         scrollbar = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=self.charts_canvas.yview)
@@ -1156,10 +1188,16 @@ class CanMonitorApp:
         for index, signal in enumerate(self.signals):
             chart = self.charts.get(signal.key)
             if chart is None:
-                chart = SignalChart(self.charts_frame, signal, CHART_COLORS[index % len(CHART_COLORS)])
+                chart = SignalChart(
+                    self.charts_frame,
+                    signal,
+                    CHART_COLORS[index % len(CHART_COLORS)],
+                    redraw_callback=self._redraw_charts_once,
+                )
             else:
                 chart.signal = signal
                 chart.color = CHART_COLORS[index % len(CHART_COLORS)]
+                chart.redraw_callback = self._redraw_charts_once
                 chart.title_var.set(signal.label)
 
             chart.pack_forget()
@@ -1170,19 +1208,26 @@ class CanMonitorApp:
 
     def toggle_graph_pause(self) -> None:
         if self.graph_paused:
-            self.return_to_live()
+            self.graph_paused = False
+            self.graph_pause_time = None
+            self.pause_graph_button.configure(text="Пауза")
+            self._update_graph_state()
+            self._redraw_charts_once()
             return
 
         self.graph_paused = True
-        self.graph_pause_time = time.time()
+        self.graph_pause_time = self._graph_view_end_time()
+        self.graph_view_offset_seconds = 0.0
         self.pause_graph_button.configure(text="Продолжить")
         self._update_graph_state()
 
     def return_to_live(self) -> None:
+        self.graph_view_offset_seconds = 0.0
         self.graph_paused = False
         self.graph_pause_time = None
         self.pause_graph_button.configure(text="Пауза")
         self._update_graph_state()
+        self._redraw_charts_once()
 
     def clear_graphs(self) -> None:
         for chart in self.charts.values():
@@ -1204,8 +1249,28 @@ class CanMonitorApp:
         self._update_graph_state()
         self._redraw_charts_once()
 
+    def pan_graph_time(self, direction: int) -> None:
+        history_seconds = self._graph_history_seconds()
+        shift = max(1.0, history_seconds * 0.5)
+        target_offset = max(0.0, self.graph_view_offset_seconds - shift if direction > 0 else self.graph_view_offset_seconds + shift)
+        base_end = self._graph_base_end_time()
+        oldest = self._oldest_chart_timestamp()
+        if oldest is not None:
+            min_end = min(base_end, oldest + history_seconds)
+            max_offset = max(0.0, base_end - min_end)
+            target_offset = min(target_offset, max_offset)
+
+        self.graph_view_offset_seconds = target_offset
+        if self.graph_view_offset_seconds <= 0:
+            self.graph_view_offset_seconds = 0.0
+            self.status_var.set("Окно графиков у live")
+        else:
+            self.status_var.set(f"Окно графиков: -{self._format_seconds(self.graph_view_offset_seconds)} от live")
+        self._update_graph_state()
+        self._redraw_charts_once()
+
     def add_time_marker(self) -> None:
-        marker_time = self.graph_pause_time if self.graph_paused and self.graph_pause_time is not None else time.time()
+        marker_time = self._graph_view_end_time()
         self.time_markers.append(marker_time)
         self.status_var.set(f"Маркер добавлен: {datetime.fromtimestamp(marker_time).strftime('%H:%M:%S')}")
         self._update_graph_state()
@@ -1218,14 +1283,47 @@ class CanMonitorApp:
         self._redraw_charts_once()
 
     def _update_graph_state(self) -> None:
-        mode = "Пауза" if self.graph_paused else "Live"
-        self.graph_state_var.set(f"{mode} | окно {max(10, int(self.history_var.get() or 600))} сек | маркеров: {len(self.time_markers)}")
+        history_seconds = self._graph_history_seconds()
+        if self.graph_view_offset_seconds > 0:
+            mode = f"Просмотр -{self._format_seconds(self.graph_view_offset_seconds)}"
+        elif self.graph_paused and self.graph_pause_time is not None:
+            mode = f"Пауза до {datetime.fromtimestamp(self.graph_pause_time).strftime('%H:%M:%S')}"
+        else:
+            mode = "Live"
+        self.graph_state_var.set(f"{mode} | окно {history_seconds} сек | маркеров: {len(self.time_markers)}")
 
     def _redraw_charts_once(self) -> None:
-        history_seconds = max(10, int(self.history_var.get() or 600))
-        now = self.graph_pause_time if self.graph_paused and self.graph_pause_time is not None else time.time()
+        history_seconds = self._graph_history_seconds()
+        now = self._graph_view_end_time()
         for chart in self.charts.values():
             chart.draw(now, history_seconds, self.time_markers)
+
+    def _graph_history_seconds(self) -> int:
+        return max(10, int(self.history_var.get() or 600))
+
+    def _graph_base_end_time(self) -> float:
+        if self.graph_paused and self.graph_pause_time is not None:
+            return self.graph_pause_time
+        return time.time()
+
+    def _graph_view_end_time(self) -> float:
+        return self._graph_base_end_time() - self.graph_view_offset_seconds
+
+    def _oldest_chart_timestamp(self) -> float | None:
+        oldest_values = [chart.points[0][0] for chart in self.charts.values() if chart.points]
+        if not oldest_values:
+            return None
+        return min(oldest_values)
+
+    def _format_seconds(self, seconds: float) -> str:
+        total_seconds = max(0, int(round(seconds)))
+        minutes, second = divmod(total_seconds, 60)
+        hours, minute = divmod(minutes, 60)
+        if hours:
+            return f"{hours}:{minute:02d}:{second:02d}"
+        if minute:
+            return f"{minute}:{second:02d}"
+        return f"{second} c"
 
     def _poll_queues(self) -> None:
         if self._closing:
@@ -1460,8 +1558,8 @@ class CanMonitorApp:
         if self._closing:
             return
 
-        history_seconds = max(10, int(self.history_var.get() or 600))
-        now = self.graph_pause_time if self.graph_paused and self.graph_pause_time is not None else time.time()
+        history_seconds = self._graph_history_seconds()
+        now = self._graph_view_end_time()
         for chart in self.charts.values():
             chart.draw(now, history_seconds, self.time_markers)
         self._update_graph_state()
@@ -1477,6 +1575,10 @@ class CanMonitorApp:
         self.discovered_id_display_values.clear()
         self.ids_list.delete(0, tk.END)
         self.time_markers.clear()
+        self.graph_view_offset_seconds = 0.0
+        self.graph_paused = False
+        self.graph_pause_time = None
+        self.pause_graph_button.configure(text="Пауза")
         self._message_table_dirty = True
         self._stats_table_dirty = True
         for chart in self.charts.values():

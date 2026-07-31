@@ -9,6 +9,7 @@ from template_registry import list_template_infos
 
 
 CATALOG_PATH = Path(__file__).resolve().parent / "can_id_catalog.json"
+EVENT_CATALOG_PATH = Path(__file__).resolve().parent / "can_event_catalog.json"
 
 
 class CanIdCatalog:
@@ -37,6 +38,7 @@ class CanIdCatalog:
         for label in self._by_id.get(normalized_id, []):
             self._append_unique(labels, label)
 
+        labels = self._compact_labels(labels)
         return ", ".join(labels)
 
     @staticmethod
@@ -44,10 +46,20 @@ class CanIdCatalog:
         if value not in values:
             values.append(value)
 
+    @staticmethod
+    def _compact_labels(labels: list[str]) -> list[str]:
+        compacted: list[str] = []
+        for label in labels:
+            if any(other != label and other.startswith(f"{label} ") for other in labels):
+                continue
+            compacted.append(label)
+        return compacted
+
 
 def load_can_id_catalog(catalog_path: str | Path = CATALOG_PATH) -> CanIdCatalog:
     catalog = CanIdCatalog()
     _load_template_labels(catalog)
+    _load_event_catalog_labels(catalog, EVENT_CATALOG_PATH)
     _load_json_catalog(catalog, Path(catalog_path))
     return catalog
 
@@ -62,8 +74,6 @@ def _load_template_labels(catalog: CanIdCatalog) -> None:
         for signal in template.signals:
             label = _template_signal_label(info.key, template.name or info.title, signal.name)
             catalog.add(signal.message_id, label, signal.channel)
-            for message_id_alias in signal.message_id_aliases:
-                catalog.add(message_id_alias, label, signal.channel)
 
 
 def _template_signal_label(template_key: str, template_name: str, signal_name: str) -> str:
@@ -90,6 +100,37 @@ def _load_json_catalog(catalog: CanIdCatalog, path: Path) -> None:
             continue
 
         catalog.add(message_id, str(label), int(channel) if channel is not None else None)
+
+
+def _load_event_catalog_labels(catalog: CanIdCatalog, path: Path) -> None:
+    if not path.exists():
+        return
+
+    try:
+        with path.open("r", encoding="utf-8") as file:
+            payload = json.load(file)
+    except Exception:
+        return
+
+    if not isinstance(payload, dict):
+        return
+
+    for event in payload.get("events") or []:
+        if not isinstance(event, dict):
+            continue
+
+        devices = event.get("devices")
+        if isinstance(devices, dict):
+            for message_id, label in devices.items():
+                catalog.add(message_id, str(label))
+            continue
+
+        label = event.get("device")
+        if not label:
+            continue
+
+        for message_id in event.get("can_ids") or []:
+            catalog.add(message_id, str(label))
 
 
 def _iter_json_entries(payload: Any) -> list[dict[str, Any]]:

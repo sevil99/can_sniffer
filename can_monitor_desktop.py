@@ -27,6 +27,7 @@ from built_in_templates import (
     default_mid_selection,
 )
 from can_receiver import create_receiver
+from can_events import DecodedCanEvent, load_can_event_decoder
 from can_id_catalog import load_can_id_catalog
 from can_signal import (
     ProjectTemplate,
@@ -418,13 +419,18 @@ class CanMonitorApp:
         self.discovered_ids: set[str] = set()
         self.discovered_id_display_values: dict[str, str] = {}
         self.can_id_catalog = load_can_id_catalog()
+        self.can_event_decoder = load_can_event_decoder()
         self.recent_rows: deque[tuple[Any, ...]] = deque(maxlen=200)
+        self.event_rows: deque[tuple[tuple[Any, ...], str]] = deque(maxlen=1000)
+        self.last_event_values: dict[str, str] = {}
 
         self.session_messages = 0
         self.parsed_points = 0
+        self.decoded_events = 0
         self.is_connected = False
         self._message_table_dirty = False
         self._stats_table_dirty = False
+        self._event_table_dirty = False
         self._closing = False
         self.graph_paused = False
         self.graph_pause_time: float | None = None
@@ -439,6 +445,7 @@ class CanMonitorApp:
         self.status_var = tk.StringVar(value="Выберите папку для сессий")
         self.session_var = tk.StringVar(value="Сессия: не выбрана")
         self.count_var = tk.StringVar(value="Сообщений: 0")
+        self.event_log_var = tk.StringVar(value="Событий: 0")
 
         self._build_ui()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
@@ -539,13 +546,16 @@ class CanMonitorApp:
 
         graphs_tab = ttk.Frame(notebook)
         messages_tab = ttk.Frame(notebook)
+        events_tab = ttk.Frame(notebook)
         stats_tab = ttk.Frame(notebook)
         notebook.add(graphs_tab, text="Графики")
         notebook.add(messages_tab, text="Сообщения")
+        notebook.add(events_tab, text="Журнал/ошибки")
         notebook.add(stats_tab, text="Статистика ID")
 
         self._build_graphs_tab(graphs_tab)
         self._build_messages_tab(messages_tab)
+        self._build_events_tab(events_tab)
         self._build_stats_tab(stats_tab)
 
     def _build_graphs_tab(self, parent: ttk.Frame) -> None:
@@ -616,6 +626,40 @@ class CanMonitorApp:
         self.messages_tree.configure(yscrollcommand=scrollbar.set)
         self.messages_tree.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
+
+    def _build_events_tab(self, parent: ttk.Frame) -> None:
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(1, weight=1)
+
+        toolbar = ttk.Frame(parent, padding=(0, 0, 0, 8))
+        toolbar.grid(row=0, column=0, columnspan=2, sticky="ew")
+        toolbar.columnconfigure(1, weight=1)
+        ttk.Button(toolbar, text="Очистить", command=self.clear_event_log).grid(row=0, column=0, padx=(0, 8))
+        ttk.Label(toolbar, textvariable=self.event_log_var).grid(row=0, column=1, sticky="e")
+
+        columns = ("time", "level", "device", "event", "details", "ch", "id", "data")
+        self.events_tree = ttk.Treeview(parent, columns=columns, show="headings")
+        for column, title, width in (
+            ("time", "Время", 150),
+            ("level", "Уровень", 80),
+            ("device", "Устройство", 100),
+            ("event", "Событие", 170),
+            ("details", "Детали", 420),
+            ("ch", "CH", 45),
+            ("id", "CAN ID", 90),
+            ("data", "Данные", 220),
+        ):
+            self.events_tree.heading(column, text=title)
+            self.events_tree.column(column, width=width, anchor=tk.W, stretch=column in ("details", "data"))
+
+        self.events_tree.tag_configure("error", foreground="#b91c1c")
+        self.events_tree.tag_configure("warning", foreground="#a16207")
+        self.events_tree.tag_configure("info", foreground="#0f172a")
+
+        scrollbar = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=self.events_tree.yview)
+        self.events_tree.configure(yscrollcommand=scrollbar.set)
+        self.events_tree.grid(row=1, column=0, sticky="nsew")
+        scrollbar.grid(row=1, column=1, sticky="ns")
 
     def _build_stats_tab(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(0, weight=1)
@@ -1236,6 +1280,14 @@ class CanMonitorApp:
         self.status_var.set("Графики очищены")
         self._update_graph_state()
 
+    def clear_event_log(self) -> None:
+        self.event_rows.clear()
+        self.last_event_values.clear()
+        self.decoded_events = 0
+        self.event_log_var.set("Событий: 0")
+        self._event_table_dirty = True
+        self.status_var.set("Журнал событий очищен")
+
     def autoscale_graphs(self) -> None:
         self.status_var.set("Автомасштаб применен")
         self._update_graph_state()
@@ -1387,6 +1439,7 @@ class CanMonitorApp:
             self.logger.log_message(can_message, channel, parsed)
 
         self._update_can_id_stats(can_message, channel, timestamp)
+        self._remember_can_events(can_message, channel, timestamp)
 
         for signal_key, value in parsed.items():
             chart = self.charts.get(signal_key)
@@ -1431,6 +1484,49 @@ class CanMonitorApp:
         stats["length"] = length
         stats["sample"] = data_hex
         self._stats_table_dirty = True
+
+    def _remember_can_events(self, can_message: Any, channel: int, timestamp: float) -> None:
+        for decoded_event in self.can_event_decoder.decode(can_message, channel):
+            if not self._should_log_can_event(decoded_event):
+                continue
+            self._remember_event_row(decoded_event, timestamp)
+
+    def _should_log_can_event(self, decoded_event: DecodedCanEvent) -> bool:
+        if decoded_event.dedupe != "value":
+            return True
+
+        previous_value = self.last_event_values.get(decoded_event.dedupe_key)
+        if previous_value == decoded_event.dedupe_value:
+            return False
+
+        self.last_event_values[decoded_event.dedupe_key] = decoded_event.dedupe_value
+        return True
+
+    def _remember_event_row(self, decoded_event: DecodedCanEvent, timestamp: float) -> None:
+        time_text = datetime.fromtimestamp(timestamp).strftime("%H:%M:%S.%f")[:-3]
+        level_text = self._event_severity_label(decoded_event.severity)
+        values = (
+            time_text,
+            level_text,
+            decoded_event.device,
+            decoded_event.title,
+            decoded_event.details,
+            decoded_event.channel,
+            decoded_event.can_id,
+            decoded_event.data_hex,
+        )
+        self.event_rows.appendleft((values, decoded_event.severity))
+        self.decoded_events += 1
+        self.event_log_var.set(f"Событий: {self.decoded_events}")
+        self._event_table_dirty = True
+
+    @staticmethod
+    def _event_severity_label(severity: str) -> str:
+        return {
+            "error": "Ошибка",
+            "warning": "Внимание",
+            "info": "Инфо",
+        }.get(severity, severity)
 
     def _remember_discovered_id(self, can_message: Any, channel: int) -> None:
         try:
@@ -1519,8 +1615,19 @@ class CanMonitorApp:
             self._refresh_stats_table()
             self._stats_table_dirty = False
 
+        if self._event_table_dirty:
+            self._refresh_event_table()
+            self._event_table_dirty = False
+
         if not self._closing:
             self.root.after(250, self._refresh_message_table)
+
+    def _refresh_event_table(self) -> None:
+        for item in self.events_tree.get_children():
+            self.events_tree.delete(item)
+
+        for values, severity in self.event_rows:
+            self.events_tree.insert("", tk.END, values=values, tags=(severity,))
 
     def _refresh_stats_table(self) -> None:
         for item in self.stats_tree.get_children():
@@ -1570,6 +1677,8 @@ class CanMonitorApp:
         self.session_messages = 0
         self.parsed_points = 0
         self.recent_rows.clear()
+        self.event_rows.clear()
+        self.last_event_values.clear()
         self.can_id_stats.clear()
         self.discovered_ids.clear()
         self.discovered_id_display_values.clear()
@@ -1581,6 +1690,9 @@ class CanMonitorApp:
         self.pause_graph_button.configure(text="Пауза")
         self._message_table_dirty = True
         self._stats_table_dirty = True
+        self._event_table_dirty = True
+        self.decoded_events = 0
+        self.event_log_var.set("Событий: 0")
         for chart in self.charts.values():
             chart.clear()
         self._update_graph_state()

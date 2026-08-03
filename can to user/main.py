@@ -48,7 +48,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from can_signal import ProjectTemplate, parse_can_id, parse_message_signals  # noqa: E402
+from can_signal import ProjectTemplate, SignalIndex, parse_can_id, parse_message_signals  # noqa: E402
 from template_registry import get_mid_cylinders, get_mid_metrics, list_template_infos, load_template_definition  # noqa: E402
 
 
@@ -447,6 +447,17 @@ def signals_for_channel(template: ProjectTemplate, channel: int, cache: dict[int
     return cache[channel]
 
 
+def signal_index_for_channel(
+    template: ProjectTemplate,
+    channel: int,
+    signal_cache: dict[int, list[Any]],
+    index_cache: dict[int, SignalIndex],
+) -> SignalIndex:
+    if channel not in index_cache:
+        index_cache[channel] = SignalIndex(signals_for_channel(template, channel, signal_cache))
+    return index_cache[channel]
+
+
 def signal_choice_label(signal: Any, compact: bool = False) -> str:
     if compact:
         return signal.name
@@ -583,6 +594,8 @@ def decode_dataframe(
         raise ValueError(f"Не найдены колонки с CAN ID/данными. Колонки файла: {list(df.columns)}")
 
     signal_cache: dict[int, list[Any]] = {}
+    signal_index_cache: dict[int, SignalIndex] = {}
+    signal_by_key_cache: dict[int, dict[str, Any]] = {}
     rows: list[dict[str, Any]] = []
     total_rows = len(df)
     report_progress(progress, f"Расшифровка строки: 0/{total_rows}", 0.0 if total_rows else None)
@@ -597,12 +610,15 @@ def decode_dataframe(
 
         channel = parse_channel(row.get(columns.channel), template.channel) if columns.channel else template.channel
         signals = signals_for_channel(template, channel, signal_cache)
-        signal_by_key = {signal.key: signal for signal in signals}
+        signal_index = signal_index_for_channel(template, channel, signal_cache, signal_index_cache)
+        if channel not in signal_by_key_cache:
+            signal_by_key_cache[channel] = {signal.key: signal for signal in signals}
+        signal_by_key = signal_by_key_cache[channel]
         timestamp = parse_timestamp(row.get(columns.timestamp)) if columns.timestamp else None
         elapsed = parse_elapsed(row.get(columns.elapsed)) if columns.elapsed else None
 
         for message in row_to_messages(row, columns, template, channel, signals):
-            parsed = parse_message_signals(message, channel, signals)
+            parsed = signal_index.parse_message(message, channel)
             for signal_key, value in parsed.items():
                 signal = signal_by_key.get(signal_key)
                 rows.append(

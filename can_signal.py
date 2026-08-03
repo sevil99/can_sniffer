@@ -260,6 +260,37 @@ class ProjectTemplate:
             json.dump(payload, file, indent=2, ensure_ascii=False)
 
 
+class SignalIndex:
+    def __init__(self, signals: list[SignalDefinition] | tuple[SignalDefinition, ...] = ()):
+        self._by_channel_id: dict[tuple[int, int], list[SignalDefinition]] = {}
+        for signal in signals:
+            self.add(signal)
+
+    def add(self, signal: SignalDefinition) -> None:
+        message_ids = list(dict.fromkeys([signal.message_id, *signal.message_id_aliases]))
+        for message_id in message_ids:
+            key = (int(signal.channel), parse_can_id(message_id))
+            self._by_channel_id.setdefault(key, []).append(signal)
+
+    def candidates(self, can_message: Any, channel: int) -> tuple[SignalDefinition, ...]:
+        try:
+            message_id = get_message_id(can_message)
+        except Exception:
+            return ()
+        return tuple(self._by_channel_id.get((int(channel), message_id), ()))
+
+    def parse_message(self, can_message: Any, channel: int) -> dict[str, float]:
+        values: dict[str, float] = {}
+        for signal in self.candidates(can_message, channel):
+            if not message_payload_matches_signal(can_message, signal):
+                continue
+
+            value = parse_signal_value(can_message, signal)
+            if value is not None:
+                values[signal.key] = value
+        return values
+
+
 def message_matches_signal(can_message: Any, channel: int, signal: SignalDefinition) -> bool:
     if int(channel) != int(signal.channel):
         return False
@@ -269,6 +300,10 @@ def message_matches_signal(can_message: Any, channel: int, signal: SignalDefinit
     if get_message_id(can_message) not in message_ids:
         return False
 
+    return message_payload_matches_signal(can_message, signal)
+
+
+def message_payload_matches_signal(can_message: Any, signal: SignalDefinition) -> bool:
     if signal.first_bytes:
         actual = get_message_signature(can_message, len(signal.first_bytes) // 2)
         if actual.upper() != signal.first_bytes.upper():
@@ -337,8 +372,11 @@ def parse_signal_value(can_message: Any, signal: SignalDefinition) -> float | No
 def parse_message_signals(
     can_message: Any,
     channel: int,
-    signals: list[SignalDefinition],
+    signals: list[SignalDefinition] | SignalIndex,
 ) -> dict[str, float]:
+    if isinstance(signals, SignalIndex):
+        return signals.parse_message(can_message, channel)
+
     values: dict[str, float] = {}
     for signal in signals:
         if not message_matches_signal(can_message, channel, signal):

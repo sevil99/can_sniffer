@@ -33,11 +33,11 @@ from can_signal import (
     ProjectTemplate,
     SUPPORTED_BYTE_ORDERS,
     SUPPORTED_TYPES,
+    SignalIndex,
     SignalDefinition,
     get_message_id_string,
     normalize_can_id,
     parse_can_id,
-    parse_message_signals,
 )
 from session_logger import CsvSessionLogger
 
@@ -90,7 +90,11 @@ class CanReader(threading.Thread):
             self.receiver = create_receiver()
             connected = self.receiver.connect(channel=self.channel, baud_rate=self.baud_rate)
             if not connected:
-                self.event_queue.put(("error", "Не удалось подключиться к CAN-каналу"))
+                details = str(getattr(self.receiver, "last_error", "") or "").strip()
+                message = "Не удалось подключиться к CAN-каналу"
+                if details:
+                    message = f"{message}: {details}"
+                self.event_queue.put(("error", message))
                 return
 
             self.event_queue.put(("connected", f"Подключено: CH{self.channel}, {self.baud_rate} bit/s"))
@@ -415,6 +419,7 @@ class CanMonitorApp:
 
         self.signals: list[SignalDefinition] = []
         self.signal_by_key: dict[str, SignalDefinition] = {}
+        self.signal_index = SignalIndex()
         self.charts: dict[str, SignalChart] = {}
         self.discovered_ids: set[str] = set()
         self.discovered_id_display_values: dict[str, str] = {}
@@ -1282,6 +1287,7 @@ class CanMonitorApp:
 
     def _rebuild_signal_views(self) -> None:
         self.signal_by_key = {signal.key: signal for signal in self.signals}
+        self.signal_index = SignalIndex(self.signals)
 
         for item in self.signals_tree.get_children():
             self.signals_tree.delete(item)
@@ -1531,7 +1537,7 @@ class CanMonitorApp:
         received_at = getattr(can_message, "receive_time", None)
         timestamp = received_at.timestamp() if isinstance(received_at, datetime) else time.time()
 
-        parsed = parse_message_signals(can_message, channel, self.signals)
+        parsed = self.signal_index.parse_message(can_message, channel)
         self.parsed_points += len(parsed)
 
         if self.logger is not None:
